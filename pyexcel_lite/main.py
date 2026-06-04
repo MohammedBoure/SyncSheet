@@ -144,11 +144,11 @@ class SpreadsheetView(QTableView):
         super().wheelEvent(event)
 
     def copy_selection(self) -> None:
-        indexes = self.selectedIndexes()
-        if not indexes:
+        ranges = self.selection_ranges()
+        if not ranges:
             return
-        rows = sorted(set(index.row() for index in indexes))
-        columns = sorted(set(index.column() for index in indexes))
+        rows = sorted({row for item in ranges for row in range(item.top(), item.bottom() + 1)})
+        columns = sorted({column for item in ranges for column in range(item.left(), item.right() + 1)})
         model = self.model()
         lines = []
         for row in rows:
@@ -177,10 +177,19 @@ class SpreadsheetView(QTableView):
         model.set_values(values, refresh_dependents=True)
 
     def clear_selection(self) -> None:
-        selection = self.selectionModel().selection()
-        if selection.isEmpty():
+        ranges = self.selection_ranges()
+        if not ranges:
             return
-        self.model().clear_ranges(list(selection), refresh_dependents=True)
+        self.model().clear_ranges(ranges, refresh_dependents=True)
+
+    def selection_ranges(self):
+        selection_model = self.selectionModel()
+        if selection_model is None:
+            return []
+        selection = selection_model.selection()
+        if selection.isEmpty():
+            return []
+        return list(selection)
 
     def contextMenuEvent(self, event) -> None:
         self.prepare_context_selection(self.indexAt(event.pos()))
@@ -200,7 +209,7 @@ class SpreadsheetView(QTableView):
     def build_context_menu(self) -> QMenu:
         menu = QMenu(self)
         menu.setObjectName("cellContextMenu")
-        has_selection = bool(self.selectedIndexes())
+        has_selection = bool(self.selection_ranges())
         has_clipboard_text = bool(QApplication.clipboard().text())
 
         self._add_context_action(menu, "Copy", "copy", self.copy_selection, has_selection)
@@ -2182,10 +2191,13 @@ class SpreadsheetWindow(QMainWindow):
     def apply_style(self, **changes) -> None:
         if not hasattr(self, "tabs") or not self.tabs.count():
             return
-        indexes = self.current_view.selectedIndexes()
-        if not indexes and self.current_view.currentIndex().isValid():
-            indexes = [self.current_view.currentIndex()]
-        self.current_model.set_style_for_indexes(indexes, **changes)
+        ranges = self.current_view.selection_ranges()
+        if ranges:
+            self.current_model.set_style_for_ranges(ranges, **changes)
+            return
+        index = self.current_view.currentIndex()
+        if index.isValid():
+            self.current_model.set_style_for_indexes([index], **changes)
 
     def pick_color(self, style_key: str) -> None:
         color = QColorDialog.getColor(QColor("#111827" if style_key == "text_color" else "#ffffff"), self)

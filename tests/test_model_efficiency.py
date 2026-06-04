@@ -66,6 +66,15 @@ class ModelEfficiencyTest(unittest.TestCase):
         self.assertEqual(self.model.zoom_factor, 1.25)
         self.assertEqual(emissions, [])
 
+    def test_style_range_applies_without_materializing_selected_indexes(self):
+        selection = QItemSelection(self.model.index(0, 0), self.model.index(1, 1))
+
+        self.model.set_style_for_ranges(list(selection), bold=True)
+
+        self.assertTrue(self.sheet.get_cell(0, 0).style.bold)
+        self.assertTrue(self.sheet.get_cell(1, 1).style.bold)
+        self.assertEqual(len(self.sheet.cells), 4)
+
     def test_formula_results_are_cached_until_sheet_changes(self):
         self.model.set_values([(0, 0, "10"), (0, 1, "20"), (0, 2, "=SUM(A1:B1)")])
         formula_index = self.model.index(0, 2)

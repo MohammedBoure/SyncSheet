@@ -222,6 +222,17 @@ class WorksheetTableModel(QAbstractTableModel):
             self.sheet.set_style(index.row(), index.column(), **changes)
         self.dataChanged.emit(self.index(top, left), self.index(bottom, right), [Qt.FontRole, Qt.ForegroundRole, Qt.BackgroundRole, Qt.TextAlignmentRole])
 
+    def set_style_for_ranges(self, ranges: list[QItemSelectionRange], **changes) -> None:
+        normalized = self._normalized_ranges(ranges)
+        if not normalized:
+            return
+        roles = [Qt.FontRole, Qt.ForegroundRole, Qt.BackgroundRole, Qt.TextAlignmentRole]
+        for top, left, bottom, right in normalized:
+            for row in range(top, bottom + 1):
+                for column in range(left, right + 1):
+                    self.sheet.set_style(row, column, **changes)
+            self.dataChanged.emit(self.index(top, left), self.index(bottom, right), roles)
+
     def set_zoom_factor(self, factor: float) -> None:
         if abs(self.zoom_factor - factor) < 0.001:
             return
