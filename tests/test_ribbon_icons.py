@@ -23,6 +23,11 @@ class RibbonIconTest(unittest.TestCase):
                 window.save_action,
                 window.save_as_action,
                 window.export_csv_action,
+                window.open_project_action,
+                window.refresh_project_action,
+                window.open_project_file_action,
+                window.share_project_action,
+                window.close_project_action,
                 window.add_sheet_action,
                 window.insert_row_action,
                 window.delete_row_action,
@@ -55,7 +60,7 @@ class RibbonIconTest(unittest.TestCase):
             self.assertEqual(window.ribbon.objectName(), "excelRibbon")
             self.assertEqual(
                 [window.ribbon.tabText(index) for index in range(window.ribbon.count())],
-                ["Home", "Insert", "Formulas", "Data", "View", "Network"],
+                ["Home", "Project", "Insert", "Formulas", "Data", "View", "Network"],
             )
             ribbon_buttons = window.ribbon.findChildren(QToolButton, "ribbonButton")
             self.assertGreaterEqual(len(ribbon_buttons), 20)
@@ -75,9 +80,9 @@ class RibbonIconTest(unittest.TestCase):
             section_icons = window.inspector.findChildren(QLabel, "inspectorSectionIcon")
             sidebar_buttons = window.inspector.findChildren(QToolButton, "sidebarButton")
 
-            self.assertGreaterEqual(len(sections), 6)
-            self.assertTrue({"Selection", "Quick Stats", "Network", "Formula Library", "Cell Algorithm", "Charts"}.issubset(set(titles)))
-            self.assertGreaterEqual(len(section_icons), 6)
+            self.assertGreaterEqual(len(sections), 7)
+            self.assertTrue({"Selection", "Quick Stats", "Network", "Project", "Formula Library", "Cell Algorithm", "Charts"}.issubset(set(titles)))
+            self.assertGreaterEqual(len(section_icons), 7)
             self.assertTrue(all(label.pixmap() is not None and not label.pixmap().isNull() for label in section_icons))
             self.assertGreaterEqual(len(sidebar_buttons), 8)
             self.assertTrue(all(not button.icon().isNull() for button in sidebar_buttons))

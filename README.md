@@ -5,14 +5,15 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 ## Features
 
 - Excel-style grid with row and column headers.
-- Excel-like tabbed ribbon with Home, Insert, Formulas, Data, View, and Network command pages.
+- Excel-like tabbed ribbon with Home, Project, Insert, Formulas, Data, View, and Network command pages.
 - Professional top panel under the ribbon with icon-led sections for selection, stats, network collaboration, formulas, algorithms, and charts.
+- Project workspace support for opening a whole folder tree as one project, including nested folders and multiple workbook or CSV files.
 - Large-table performance improvements with batched paste/clear operations, partial redraws, and cached formula results.
 - Undo and redo for cell edits, paste operations, clears, and generated formulas.
 - Bar, line, and pie charts from the selected cells.
 - Realtime LAN collaboration with Host, Join, and Leave controls so multiple users can edit the same workbook together.
 - Network startup settings that can launch the app in manual mode, connect directly to a shared server, or make the current program host a server automatically.
-- Standalone shared-workbook server for LAN client/server use, with JSON state persistence.
+- Standalone shared-workbook and project server for LAN client/server use, with JSON state persistence.
 - TCP socket sync for workbook snapshots, cell edits, paste/clear batches, sheet add/rename/delete, and row/column insert/delete operations.
 - Formula bar with live display and raw formula editing.
 - Formula library for applying arithmetic, statistical, logical, lookup, and custom cell algorithms to the active cell or selected range.
@@ -69,6 +70,14 @@ D:\git\GoldShop\venv\Scripts\python.exe run_collaboration_server.py --host 0.0.0
 
 Then set each client to `Network > Startup > Connect to shared server` and enter the server IP and port.
 The standalone server keeps the shared workbook in `shared_workbook_state.json` by default, so the latest central state can survive a server restart.
+
+## Project Workspaces
+
+Use `Project > Open Project` to choose a parent folder. The program scans nested folders as one workspace and shows the project tree in the top Project panel.
+XLSX and CSV files can be opened directly from the project tree; opening a project spreadsheet sends a full workbook snapshot to connected teammates.
+
+Use `Project > Share Project` while connected to a host or shared server to synchronize the project structure with the team.
+The shared server stores both the active workbook and the latest project snapshot, so new clients receive the same workspace context when they join.
 
 ## Test
 

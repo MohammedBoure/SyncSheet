@@ -18,6 +18,7 @@ from .network import (
     workbook_from_payload,
     workbook_to_payload,
 )
+from .project import ProjectData, project_from_payload, project_to_payload
 from .workbook import WorkbookData, WorksheetData
 
 
@@ -34,8 +35,10 @@ class CollaborationWorkbookServer(QObject):
         super().__init__()
         self.state_path = Path(state_path) if state_path else None
         self._lock = threading.RLock()
-        self.workbook = workbook or self._load_state() or WorkbookData()
-        self.server = CollaborationServer(host=host, port=port, snapshot_provider=self.snapshot_payload)
+        state_workbook, state_project = self._load_state()
+        self.workbook = workbook or state_workbook or WorkbookData()
+        self.project = state_project or ProjectData()
+        self.server = CollaborationServer(host=host, port=port, snapshot_message_provider=self.snapshot_message)
         self.server.message_received.connect(self.apply_message, Qt.ConnectionType.DirectConnection)
 
     @property
@@ -54,6 +57,14 @@ class CollaborationWorkbookServer(QObject):
         with self._lock:
             return workbook_to_payload(self.workbook)
 
+    def snapshot_message(self) -> dict:
+        with self._lock:
+            return {
+                "type": "snapshot",
+                "workbook": workbook_to_payload(self.workbook),
+                "project": project_to_payload(self.project),
+            }
+
     @Slot(dict)
     def apply_message(self, message: dict) -> None:
         if self.apply_workbook_message(message):
@@ -69,6 +80,14 @@ class CollaborationWorkbookServer(QObject):
                 if not isinstance(payload, dict):
                     return False
                 self.workbook = workbook_from_payload(payload)
+                if isinstance(message.get("project"), dict):
+                    self.project = project_from_payload(message.get("project"))
+                return True
+            if message_type == "project_snapshot":
+                payload = message.get("project")
+                if not isinstance(payload, dict):
+                    return False
+                self.project = project_from_payload(payload)
                 return True
             if message_type == "cell_update":
                 return self._apply_cell_update(message)
@@ -162,23 +181,31 @@ class CollaborationWorkbookServer(QObject):
     def _clamped_sheet_insert_index(self, value) -> int:
         return max(0, min(self._safe_int(value, len(self.workbook.sheets)), len(self.workbook.sheets)))
 
-    def _load_state(self) -> WorkbookData | None:
+    def _load_state(self) -> tuple[WorkbookData | None, ProjectData | None]:
         if self.state_path is None or not self.state_path.exists():
-            return None
+            return None, None
         try:
             payload = json.loads(self.state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return None
+            return None, None
         if not isinstance(payload, dict):
-            return None
-        return workbook_from_payload(payload)
+            return None, None
+        if isinstance(payload.get("workbook"), dict):
+            workbook = workbook_from_payload(payload["workbook"])
+            project = project_from_payload(payload.get("project")) if isinstance(payload.get("project"), dict) else None
+            return workbook, project
+        return workbook_from_payload(payload), None
 
     def save_state(self) -> None:
         if self.state_path is None:
             return
         with self._lock:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            self.state_path.write_text(json.dumps(workbook_to_payload(self.workbook), indent=2), encoding="utf-8")
+            payload = {
+                "workbook": workbook_to_payload(self.workbook),
+                "project": project_to_payload(self.project),
+            }
+            self.state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     @staticmethod
     def _safe_int(value, default: int) -> int:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from PySide6.QtCore import QItemSelection, QModelIndex, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QTableView,
     QTabWidget,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -37,7 +39,7 @@ from .chart import ChartPoint, ChartWidget
 from .cell_address import index_to_column_name
 from .formula import FormulaEvaluator, to_number
 from .icons import app_icon
-from .io_xlsx import export_csv, load_xlsx, save_xlsx
+from .io_xlsx import export_csv, load_csv, load_xlsx, save_xlsx
 from .network import (
     DEFAULT_PORT,
     CollaborationClient,
@@ -49,6 +51,13 @@ from .network import (
     structure_message,
     workbook_from_payload,
     workbook_to_payload,
+)
+from .project import (
+    ProjectData,
+    project_from_payload,
+    project_snapshot_message,
+    project_to_payload,
+    scan_project_folder,
 )
 from .qt_model import WorksheetTableModel
 from .settings import StartupSettings, load_startup_settings, save_startup_settings
@@ -162,6 +171,7 @@ class SpreadsheetWindow(QMainWindow):
         super().__init__()
         self.workbook = WorkbookData()
         self.evaluator = FormulaEvaluator(self.workbook)
+        self.project = ProjectData()
         self.models: list[WorksheetTableModel] = []
         self.current_path: Path | None = None
         self.zoom_percent = 100
@@ -197,6 +207,11 @@ class SpreadsheetWindow(QMainWindow):
         self.save_action = QAction("Save", self, shortcut=QKeySequence.Save, triggered=self.save_file)
         self.save_as_action = QAction("Save As", self, shortcut=QKeySequence.SaveAs, triggered=self.save_file_as)
         self.export_csv_action = QAction("Export CSV", self, triggered=self.export_current_csv)
+        self.open_project_action = QAction("Open Project", self, triggered=self.open_project)
+        self.refresh_project_action = QAction("Refresh Project", self, triggered=self.refresh_project)
+        self.open_project_file_action = QAction("Open Item", self, triggered=self.open_selected_project_file)
+        self.share_project_action = QAction("Share Project", self, triggered=self.send_project_snapshot)
+        self.close_project_action = QAction("Close Project", self, triggered=self.close_project)
         self.add_sheet_action = QAction("Add Sheet", self, triggered=self.add_sheet)
         self.rename_sheet_action = QAction("Rename Sheet", self, triggered=self.rename_sheet)
         self.delete_sheet_action = QAction("Delete Sheet", self, triggered=self.delete_sheet)
@@ -227,6 +242,11 @@ class SpreadsheetWindow(QMainWindow):
             self.save_action: ("save", "Save the current workbook"),
             self.save_as_action: ("save_as", "Save this workbook with a new name"),
             self.export_csv_action: ("csv", "Export the active sheet as CSV"),
+            self.open_project_action: ("project", "Open a folder tree as one project"),
+            self.refresh_project_action: ("refresh", "Refresh the current project folder"),
+            self.open_project_file_action: ("open", "Open the selected project spreadsheet"),
+            self.share_project_action: ("network_host", "Share the project snapshot with collaborators"),
+            self.close_project_action: ("clear", "Close the current project"),
             self.add_sheet_action: ("sheet_add", "Add a new worksheet"),
             self.rename_sheet_action: ("sheet_rename", "Rename the active worksheet"),
             self.delete_sheet_action: ("sheet_delete", "Delete the active worksheet"),
@@ -278,6 +298,16 @@ class SpreadsheetWindow(QMainWindow):
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("File")
         file_menu.addActions([self.new_action, self.open_action, self.save_action, self.save_as_action, self.export_csv_action])
+        project_menu = self.menuBar().addMenu("Project")
+        project_menu.addActions(
+            [
+                self.open_project_action,
+                self.refresh_project_action,
+                self.open_project_file_action,
+                self.share_project_action,
+                self.close_project_action,
+            ]
+        )
         sheet_menu = self.menuBar().addMenu("Sheet")
         sheet_menu.addActions([self.add_sheet_action, self.rename_sheet_action, self.delete_sheet_action])
         edit_menu = self.menuBar().addMenu("Edit")
@@ -302,6 +332,7 @@ class SpreadsheetWindow(QMainWindow):
         ribbon.setTabPosition(QTabWidget.North)
         ribbon.setMaximumHeight(172)
         ribbon.addTab(self._home_ribbon_page(), "Home")
+        ribbon.addTab(self._project_ribbon_page(), "Project")
         ribbon.addTab(self._insert_ribbon_page(), "Insert")
         ribbon.addTab(self._formulas_ribbon_page(), "Formulas")
         ribbon.addTab(self._data_ribbon_page(), "Data")
@@ -395,6 +426,19 @@ class SpreadsheetWindow(QMainWindow):
         alignment.addWidget(self._ribbon_small_label("Align"))
         alignment.addWidget(self.align_box)
 
+        layout.addStretch(1)
+        return page
+
+    def _project_ribbon_page(self) -> QWidget:
+        page, layout = self._ribbon_page()
+        project = self._ribbon_group(layout, "Project")
+        for action in (self.open_project_action, self.refresh_project_action, self.open_project_file_action, self.close_project_action):
+            project.addWidget(self._ribbon_action_button(action))
+
+        team = self._ribbon_group(layout, "Team")
+        team.addWidget(self._ribbon_action_button(self.share_project_action))
+        team.addWidget(self._ribbon_action_button(self.host_network_action))
+        team.addWidget(self._ribbon_action_button(self.join_network_action))
         layout.addStretch(1)
         return page
 
@@ -644,6 +688,21 @@ class SpreadsheetWindow(QMainWindow):
                 background: #dff3e8;
                 border-color: #107c41;
             }
+            QTreeWidget#projectTree {
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+                color: #1f2937;
+                padding: 3px;
+            }
+            QTreeWidget#projectTree::item {
+                min-height: 20px;
+                padding: 2px 4px;
+            }
+            QTreeWidget#projectTree::item:selected {
+                background: #dff3e8;
+                color: #0b5f32;
+            }
             """
         )
 
@@ -715,7 +774,7 @@ class SpreadsheetWindow(QMainWindow):
 
         widget = QWidget()
         widget.setObjectName("inspectorContent")
-        widget.setMinimumWidth(1710)
+        widget.setMinimumWidth(2100)
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
@@ -749,6 +808,27 @@ class SpreadsheetWindow(QMainWindow):
         network_layout.addWidget(self.network_status_label)
         network_layout.addLayout(network_buttons)
         layout.addWidget(network_section)
+
+        project_section, project_layout = self._inspector_section("Project", "project")
+        project_section.setFixedWidth(380)
+        self.project_summary_label = QLabel("No project")
+        self.project_summary_label.setObjectName("inspectorValue")
+        self.project_summary_label.setWordWrap(True)
+        self.project_tree = QTreeWidget()
+        self.project_tree.setObjectName("projectTree")
+        self.project_tree.setHeaderHidden(True)
+        self.project_tree.setFixedHeight(92)
+        self.project_tree.itemSelectionChanged.connect(self.update_project_actions)
+        self.project_tree.itemDoubleClicked.connect(lambda _item, _column: self.open_selected_project_file())
+        project_buttons = QHBoxLayout()
+        project_buttons.setContentsMargins(0, 0, 0, 0)
+        project_buttons.setSpacing(6)
+        for action in (self.open_project_action, self.refresh_project_action, self.open_project_file_action, self.share_project_action):
+            project_buttons.addWidget(self._sidebar_action_button(action))
+        project_layout.addWidget(self.project_summary_label)
+        project_layout.addWidget(self.project_tree)
+        project_layout.addLayout(project_buttons)
+        layout.addWidget(project_section)
 
         formula_section, formula_layout = self._inspector_section("Formula Library", "formula")
         formula_section.setFixedWidth(300)
@@ -831,7 +911,134 @@ class SpreadsheetWindow(QMainWindow):
 
         layout.addStretch(1)
         scroll.setWidget(widget)
+        self.update_project_panel()
         return scroll
+
+    def open_project(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Open project folder")
+        if not path:
+            return
+        self.load_project(Path(path))
+        self.send_project_snapshot()
+
+    def load_project(self, path: Path) -> None:
+        try:
+            self.project = scan_project_folder(path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Open project failed", str(exc))
+            return
+        self.update_project_panel()
+        self.statusBar().showMessage(f"Project opened: {self.project.name}")
+
+    def refresh_project(self) -> None:
+        if not self.project.root_path or self.project.remote:
+            self.statusBar().showMessage("No local project folder to refresh")
+            return
+        self.load_project(Path(self.project.root_path))
+        self.send_project_snapshot()
+
+    def close_project(self) -> None:
+        self.project = ProjectData()
+        self.update_project_panel()
+        self.send_project_snapshot()
+        self.statusBar().showMessage("Project closed")
+
+    def send_project_snapshot(self) -> None:
+        if self.applying_remote_update or self.collaboration is None or not self.collaboration.running:
+            return
+        self.send_collaboration_message(project_snapshot_message(self.project))
+
+    def update_project_panel(self) -> None:
+        if not hasattr(self, "project_tree"):
+            return
+        self.project_tree.clear()
+        if not self.project.is_open:
+            self.project_summary_label.setText("No project")
+            self.update_project_actions()
+            return
+
+        location = "Remote team project" if self.project.remote else self.project.root_path or "Local project"
+        self.project_summary_label.setText(
+            f"{self.project.name}\n{self.project.total_entries} items\n{self.project.openable_count} spreadsheets\n{location}"
+        )
+        root_item = QTreeWidgetItem([self.project.name])
+        root_item.setIcon(0, app_icon("project"))
+        root_item.setData(0, Qt.UserRole, "")
+        root_item.setData(0, Qt.UserRole + 1, "folder")
+        self.project_tree.addTopLevelItem(root_item)
+        folder_items: dict[str, QTreeWidgetItem] = {"": root_item}
+
+        for folder in self.project.folders:
+            folder_items[folder] = self._ensure_project_folder_item(folder, folder_items)
+        for file_item in self.project.files:
+            parent_path = PurePosixPath(file_item.relative_path).parent.as_posix()
+            if parent_path == ".":
+                parent_path = ""
+            parent_item = self._ensure_project_folder_item(parent_path, folder_items)
+            item = QTreeWidgetItem([file_item.name])
+            icon_name = "csv" if file_item.kind == "csv" else "sheet_add" if file_item.openable else "open"
+            item.setIcon(0, app_icon(icon_name))
+            item.setData(0, Qt.UserRole, file_item.relative_path)
+            item.setData(0, Qt.UserRole + 1, "file")
+            parent_item.addChild(item)
+        self.project_tree.expandToDepth(1)
+        self.update_project_actions()
+
+    def _ensure_project_folder_item(
+        self, folder_path: str, folder_items: dict[str, QTreeWidgetItem]
+    ) -> QTreeWidgetItem:
+        folder_path = "" if folder_path == "." else folder_path
+        if folder_path in folder_items:
+            return folder_items[folder_path]
+        parent_path = PurePosixPath(folder_path).parent.as_posix()
+        if parent_path == ".":
+            parent_path = ""
+        parent_item = self._ensure_project_folder_item(parent_path, folder_items)
+        item = QTreeWidgetItem([PurePosixPath(folder_path).name])
+        item.setIcon(0, app_icon("project"))
+        item.setData(0, Qt.UserRole, folder_path)
+        item.setData(0, Qt.UserRole + 1, "folder")
+        parent_item.addChild(item)
+        folder_items[folder_path] = item
+        return item
+
+    def selected_project_file(self):
+        if not hasattr(self, "project_tree"):
+            return None
+        item = self.project_tree.currentItem()
+        if item is None or item.data(0, Qt.UserRole + 1) != "file":
+            return None
+        return self.project.file_by_relative_path(str(item.data(0, Qt.UserRole) or ""))
+
+    def open_selected_project_file(self) -> None:
+        project_file = self.selected_project_file()
+        if project_file is None:
+            self.statusBar().showMessage("Select a spreadsheet file from the project")
+            return
+        if not project_file.openable:
+            self.statusBar().showMessage("Only XLSX and CSV project files can be opened in the spreadsheet")
+            return
+        path = self.project.absolute_path_for(project_file)
+        if path is None:
+            QMessageBox.information(self, "Project file", "This project snapshot came from the team server. Open the matching local project folder to load files from disk.")
+            return
+        try:
+            workbook = load_xlsx(path) if project_file.extension == ".xlsx" else load_csv(path)
+            self.load_workbook(workbook)
+            self.send_collaboration_snapshot()
+            self.statusBar().showMessage(f"Opened project file: {project_file.relative_path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Open project file failed", str(exc))
+
+    def update_project_actions(self) -> None:
+        if not hasattr(self, "open_project_file_action"):
+            return
+        local_project = self.project.is_open and not self.project.remote
+        selected_file = self.selected_project_file() if hasattr(self, "project_tree") else None
+        self.refresh_project_action.setEnabled(bool(local_project and self.project.root_path))
+        self.close_project_action.setEnabled(self.project.is_open)
+        self.open_project_file_action.setEnabled(bool(selected_file and selected_file.openable and local_project))
+        self.share_project_action.setEnabled(self.collaboration is not None and self.collaboration.running)
 
     def reload_formula_templates(self, _category: str | None = None) -> None:
         if not hasattr(self, "formula_template_box"):
@@ -1038,9 +1245,16 @@ class SpreadsheetWindow(QMainWindow):
             self.show_collaboration_error(f"Send failed: {exc}")
 
     def send_collaboration_snapshot(self) -> None:
-        if self.applying_remote_update or not isinstance(self.collaboration, CollaborationServer):
+        if self.applying_remote_update or self.collaboration is None or not self.collaboration.running:
             return
-        self.send_collaboration_message({"type": "snapshot", "workbook": workbook_to_payload(self.workbook)})
+        self.send_collaboration_message(self.build_collaboration_snapshot_message())
+
+    def build_collaboration_snapshot_message(self) -> dict:
+        return {
+            "type": "snapshot",
+            "workbook": workbook_to_payload(self.workbook),
+            "project": project_to_payload(self.project),
+        }
 
     def apply_startup_settings(self, *, restart: bool = False) -> None:
         settings = self.startup_settings.normalized()
@@ -1125,7 +1339,10 @@ class SpreadsheetWindow(QMainWindow):
     def start_host_collaboration(self, port: int, *, notify_user: bool = True) -> bool:
         if self.collaboration is not None:
             self.leave_collaboration()
-        server = CollaborationServer(port=port, snapshot_provider=lambda: workbook_to_payload(self.workbook))
+        server = CollaborationServer(
+            port=port,
+            snapshot_message_provider=self.build_collaboration_snapshot_message,
+        )
         self.attach_collaboration(server, "Host")
         try:
             server.start()
@@ -1233,6 +1450,7 @@ class SpreadsheetWindow(QMainWindow):
         self.host_network_action.setEnabled(not online)
         self.join_network_action.setEnabled(not online)
         self.leave_network_action.setEnabled(online)
+        self.update_project_actions()
 
     def show_collaboration_error(self, message: str) -> None:
         self.update_collaboration_status(message)
@@ -1244,6 +1462,8 @@ class SpreadsheetWindow(QMainWindow):
         try:
             if message_type == "snapshot":
                 self.apply_remote_snapshot(message)
+            elif message_type == "project_snapshot":
+                self.apply_remote_project_snapshot(message)
             elif message_type == "cell_update":
                 self.apply_remote_cell_update(message)
             elif message_type == "sheet_add":
@@ -1262,11 +1482,18 @@ class SpreadsheetWindow(QMainWindow):
         self.applying_remote_update = True
         try:
             self.load_workbook(workbook_from_payload(payload))
+            if "project" in message:
+                self.apply_remote_project_snapshot(message)
         finally:
             self.applying_remote_update = False
         self.update_formula_bar()
         self.update_selection_stats()
         self.statusBar().showMessage("Workbook synchronized")
+
+    def apply_remote_project_snapshot(self, message: dict) -> None:
+        self.project = project_from_payload(message.get("project"), remote=True)
+        self.update_project_panel()
+        self.statusBar().showMessage("Project synchronized")
 
     def apply_remote_cell_update(self, message: dict) -> None:
         model = self.remote_model(message, create=True)

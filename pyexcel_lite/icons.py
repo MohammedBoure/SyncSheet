@@ -246,6 +246,23 @@ def _draw_icon(p: QPainter, name: str, size: int) -> None:
             (QPointF(9, 19), QPointF(6, 22)),
         ):
             p.drawLine(start, end)
+    elif name == "project":
+        p.setPen(_pen(GREEN, 1.7))
+        p.setBrush(QColor(GREEN_LIGHT))
+        p.drawRoundedRect(QRectF(3, 7, 22, 16), 3, 3)
+        p.setBrush(QColor("#ffffff"))
+        p.drawRoundedRect(QRectF(5, 5, 8, 5), 2, 2)
+        p.setPen(_pen("#9ca3af", 1))
+        p.drawLine(QPointF(8, 13), QPointF(21, 13))
+        p.drawLine(QPointF(8, 17), QPointF(18, 17))
+    elif name == "refresh":
+        p.setPen(_pen(GREEN, 2.1))
+        p.setBrush(Qt.NoBrush)
+        p.drawArc(QRectF(5, 5, 18, 18), 35 * 16, 250 * 16)
+        p.drawLine(QPointF(21, 7), QPointF(23, 13))
+        p.drawLine(QPointF(21, 7), QPointF(15, 8))
+        p.setPen(_pen(BLUE, 2.1))
+        p.drawArc(QRectF(5, 5, 18, 18), 215 * 16, 105 * 16)
     elif name == "zoom_in":
         _magnifier(p, True)
     elif name == "zoom_out":

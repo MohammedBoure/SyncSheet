@@ -65,6 +65,21 @@ def load_xlsx(path: str | Path) -> WorkbookData:
     return workbook_data
 
 
+def load_csv(path: str | Path) -> WorkbookData:
+    source = Path(path)
+    sheet_data = WorksheetData(name=source.stem or "CSV")
+    with source.open("r", newline="", encoding="utf-8-sig") as handle:
+        reader = csv.reader(handle)
+        for row_index, row in enumerate(reader):
+            for column_index, value in enumerate(row):
+                if value == "":
+                    continue
+                sheet_data.set_value(row_index, column_index, value, touch=False)
+    workbook_data = WorkbookData(sheets=[sheet_data])
+    workbook_data.path = str(source)
+    return workbook_data
+
+
 def export_csv(sheet_data: WorksheetData, path: str | Path) -> None:
     max_row = 0
     max_column = 0

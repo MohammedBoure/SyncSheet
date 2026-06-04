@@ -208,12 +208,14 @@ class CollaborationServer(CollaborationEndpoint):
         host: str = "0.0.0.0",
         port: int = DEFAULT_PORT,
         snapshot_provider: Callable[[], dict] | None = None,
+        snapshot_message_provider: Callable[[], dict] | None = None,
         heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
     ):
         super().__init__()
         self.host = host
         self.port = port
         self.snapshot_provider = snapshot_provider
+        self.snapshot_message_provider = snapshot_message_provider
         self.heartbeat_interval = heartbeat_interval
         self._server_socket: socket.socket | None = None
         self._clients: list[_JsonConnection] = []
@@ -275,10 +277,13 @@ class CollaborationServer(CollaborationEndpoint):
             threading.Thread(target=self._client_loop, args=(client,), daemon=True).start()
 
     def _send_snapshot(self, client: _JsonConnection) -> None:
-        if self.snapshot_provider is None:
+        if self.snapshot_message_provider is None and self.snapshot_provider is None:
             return
         try:
-            client.send({"type": "snapshot", "workbook": self.snapshot_provider()})
+            if self.snapshot_message_provider is not None:
+                client.send(self.snapshot_message_provider())
+            elif self.snapshot_provider is not None:
+                client.send({"type": "snapshot", "workbook": self.snapshot_provider()})
         except Exception as exc:
             self.error_occurred.emit(f"Snapshot failed: {exc}")
 
