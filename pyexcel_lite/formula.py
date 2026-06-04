@@ -303,6 +303,15 @@ class FormulaEvaluator:
             "VAR": self.func_var_s,
             "VAR_S": self.func_var_s,
             "VAR_P": self.func_var_p,
+            "PERCENTILE": self.func_percentile_inc,
+            "PERCENTILE_INC": self.func_percentile_inc,
+            "QUARTILE": self.func_quartile_inc,
+            "QUARTILE_INC": self.func_quartile_inc,
+            "RANK": self.func_rank_eq,
+            "RANK_EQ": self.func_rank_eq,
+            "CORREL": self.func_correl,
+            "COVARIANCE_P": self.func_covariance_p,
+            "COVARIANCE_S": self.func_covariance_s,
             "IF": self.func_if,
             "IFS": self.func_ifs,
             "IFERROR": self.func_iferror,
@@ -720,6 +729,71 @@ class FormulaEvaluator:
     def func_var_p(self, *values: Any) -> float:
         numbers = numeric_values(*values)
         return statistics.pvariance(numbers) if numbers else 0
+
+    def func_percentile_inc(self, values: Any, percentile: Any) -> float:
+        numbers = sorted(numeric_values(values))
+        if not numbers:
+            return 0
+        k = to_number(percentile)
+        if k < 0 or k > 1:
+            raise FormulaError("PERCENTILE expects a percentile between 0 and 1")
+        position = (len(numbers) - 1) * k
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            return numbers[int(position)]
+        weight = position - lower
+        return numbers[lower] + (numbers[upper] - numbers[lower]) * weight
+
+    def func_quartile_inc(self, values: Any, quartile: Any) -> float:
+        q = int(to_number(quartile))
+        if q < 0 or q > 4:
+            raise FormulaError("QUARTILE expects a value from 0 to 4")
+        return self.func_percentile_inc(values, q / 4)
+
+    def func_rank_eq(self, number: Any, values: Any, order: Any = 0) -> int:
+        target = to_number(number)
+        ascending = int(to_number(order)) != 0
+        numbers = sorted(numeric_values(values), reverse=not ascending)
+        for index, value in enumerate(numbers, start=1):
+            if value == target:
+                return index
+        raise FormulaError("RANK value not found")
+
+    def func_correl(self, first_values: Any, second_values: Any) -> float:
+        first = numeric_values(first_values)
+        second = numeric_values(second_values)
+        count = min(len(first), len(second))
+        if count < 2:
+            return 0
+        first = first[:count]
+        second = second[:count]
+        first_mean = sum(first) / count
+        second_mean = sum(second) / count
+        numerator = sum((x - first_mean) * (y - second_mean) for x, y in zip(first, second))
+        first_denominator = math.sqrt(sum((x - first_mean) ** 2 for x in first))
+        second_denominator = math.sqrt(sum((y - second_mean) ** 2 for y in second))
+        denominator = first_denominator * second_denominator
+        return numerator / denominator if denominator else 0
+
+    def func_covariance_p(self, first_values: Any, second_values: Any) -> float:
+        return self._covariance(first_values, second_values, sample=False)
+
+    def func_covariance_s(self, first_values: Any, second_values: Any) -> float:
+        return self._covariance(first_values, second_values, sample=True)
+
+    def _covariance(self, first_values: Any, second_values: Any, *, sample: bool) -> float:
+        first = numeric_values(first_values)
+        second = numeric_values(second_values)
+        count = min(len(first), len(second))
+        if (sample and count < 2) or (not sample and count == 0):
+            return 0
+        first = first[:count]
+        second = second[:count]
+        first_mean = sum(first) / count
+        second_mean = sum(second) / count
+        divisor = count - 1 if sample else count
+        return sum((x - first_mean) * (y - second_mean) for x, y in zip(first, second)) / divisor
 
     def func_if(self, condition: Any, true_value: Any, false_value: Any = "") -> Any:
         return true_value if coerce_bool(condition) else false_value

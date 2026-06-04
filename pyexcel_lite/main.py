@@ -37,6 +37,41 @@ from .io_xlsx import export_csv, load_xlsx, save_xlsx
 from .qt_model import WorksheetTableModel
 from .workbook import WorkbookData, WorksheetData
 
+FORMULA_LIBRARY = {
+    "Arithmetic": [
+        ("Sum selected", "SUM({range})", "SUM"),
+        ("Product selected", "PRODUCT({range})", "PRODUCT"),
+        ("Rounded sum", "ROUND(SUM({range}), 2)", "ROUND"),
+        ("Percent of total", "{cell}/SUM({range})", "PERCENT"),
+    ],
+    "Statistics": [
+        ("Average selected", "AVERAGE({range})", "AVERAGE"),
+        ("Median selected", "MEDIAN({range})", "MEDIAN"),
+        ("Minimum selected", "MIN({range})", "MIN"),
+        ("Maximum selected", "MAX({range})", "MAX"),
+        ("Std deviation", "STDEV.S({range})", "STDEV.S"),
+        ("Variance", "VAR.S({range})", "VAR.S"),
+        ("Percentile 90", "PERCENTILE.INC({range}, 0.9)", "PERCENTILE"),
+        ("Quartile 3", "QUARTILE.INC({range}, 3)", "QUARTILE"),
+    ],
+    "Logic": [
+        ("Positive check", 'IF({cell}>0, "OK", "Check")', "IF"),
+        ("Error fallback", "IFERROR({cell}, 0)", "IFERROR"),
+        ("Blank check", 'IF(ISBLANK({cell}), "Empty", {cell})', "ISBLANK"),
+    ],
+    "Lookup": [
+        ("Index first", "INDEX({range}, 1, 1)", "INDEX"),
+        ("Rank current", "RANK.EQ({cell}, {range}, 0)", "RANK"),
+        ("Choose example", 'CHOOSE(1, "A", "B", "C")', "CHOOSE"),
+    ],
+    "Algorithms": [
+        ("Double current", "{cell}*2", "x2"),
+        ("Weighted score", "ROUND({cell}*0.7+SUM({range})*0.3, 2)", "WEIGHT"),
+        ("Normalize in range", "IFERROR(({cell}-MIN({range}))/(MAX({range})-MIN({range})), 0)", "NORMALIZE"),
+        ("Row calculation", "A{row}*2", "ROW"),
+    ],
+}
+
 
 class SpreadsheetView(QTableView):
     def __init__(self, window: "SpreadsheetWindow"):
@@ -280,8 +315,8 @@ class SpreadsheetWindow(QMainWindow):
         self.fill_color_button.setToolTip("Fill color")
         self.fill_color_button.setAutoRaise(True)
         self.fill_color_button.clicked.connect(lambda: self.pick_color("fill_color"))
-        for widget in [self.font_box, self.size_box, self.bold_button, self.italic_button, self.underline_button, QLabel("Align"), self.align_box, QLabel("Format"), self.number_format_box, self.text_color_button, self.fill_color_button]:
-            format_bar.addWidget(widget)
+        for control in [self.font_box, self.size_box, self.bold_button, self.italic_button, self.underline_button, QLabel("Align"), self.align_box, QLabel("Format"), self.number_format_box, self.text_color_button, self.fill_color_button]:
+            format_bar.addWidget(control)
         format_bar.addSeparator()
         format_bar.addActions([self.insert_row_action, self.delete_row_action, self.insert_column_action, self.delete_column_action, self.clear_action])
 
@@ -364,8 +399,159 @@ class SpreadsheetWindow(QMainWindow):
         self.stats_label = QLabel("Sum: 0\nAverage: 0\nCount: 0")
         self.stats_label.setWordWrap(True)
         layout.addWidget(self.stats_label)
+        layout.addWidget(QLabel("Formula Library"))
+        self.formula_category_box = QComboBox()
+        self.formula_category_box.addItems(FORMULA_LIBRARY.keys())
+        self.formula_category_box.currentTextChanged.connect(self.reload_formula_templates)
+        self.formula_template_box = QComboBox()
+        self.formula_template_box.currentIndexChanged.connect(self.update_formula_preview)
+        self.formula_preview = QLineEdit()
+        self.formula_preview.setReadOnly(True)
+        formula_buttons = QHBoxLayout()
+        self.apply_template_button = QToolButton()
+        self.apply_template_button.setText("Apply")
+        self.apply_template_button.setIcon(app_icon("formula"))
+        self.apply_template_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.apply_template_button.clicked.connect(self.apply_formula_template)
+        self.insert_template_button = QToolButton()
+        self.insert_template_button.setText("Insert")
+        self.insert_template_button.setIcon(app_icon("formula"))
+        self.insert_template_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.insert_template_button.clicked.connect(self.insert_formula_template)
+        formula_buttons.addWidget(self.apply_template_button)
+        formula_buttons.addWidget(self.insert_template_button)
+        self.custom_algorithm_input = QLineEdit()
+        self.custom_algorithm_input.setPlaceholderText("=A{row}*2")
+        custom_buttons = QHBoxLayout()
+        self.apply_custom_button = QToolButton()
+        self.apply_custom_button.setText("Apply")
+        self.apply_custom_button.setIcon(app_icon("formula"))
+        self.apply_custom_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.apply_custom_button.clicked.connect(self.apply_custom_algorithm)
+        self.fill_custom_button = QToolButton()
+        self.fill_custom_button.setText("Fill")
+        self.fill_custom_button.setIcon(app_icon("formula"))
+        self.fill_custom_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.fill_custom_button.clicked.connect(self.fill_selection_with_custom_algorithm)
+        custom_buttons.addWidget(self.apply_custom_button)
+        custom_buttons.addWidget(self.fill_custom_button)
+        for control in [self.formula_category_box, self.formula_template_box, self.formula_preview]:
+            layout.addWidget(control)
+        layout.addLayout(formula_buttons)
+        layout.addWidget(QLabel("Cell Algorithm"))
+        layout.addWidget(self.custom_algorithm_input)
+        layout.addLayout(custom_buttons)
+        self.reload_formula_templates()
         layout.addStretch(1)
         return widget
+
+    def reload_formula_templates(self, _category: str | None = None) -> None:
+        if not hasattr(self, "formula_template_box"):
+            return
+        category = self.formula_category_box.currentText() or next(iter(FORMULA_LIBRARY))
+        self.formula_template_box.blockSignals(True)
+        self.formula_template_box.clear()
+        for label, expression, _short_name in FORMULA_LIBRARY[category]:
+            self.formula_template_box.addItem(label, expression)
+        self.formula_template_box.blockSignals(False)
+        self.update_formula_preview()
+
+    def update_formula_preview(self) -> None:
+        if not hasattr(self, "formula_preview"):
+            return
+        template = self.formula_template_box.currentData()
+        self.formula_preview.setText(self.build_formula_text(template or ""))
+
+    def selected_range_reference(self) -> str:
+        if not hasattr(self, "tabs") or not self.tabs.count():
+            return "A1"
+        selection = self.current_view.selectionModel().selection()
+        if selection.isEmpty():
+            index = self.current_view.currentIndex()
+            if index.isValid():
+                return self.cell_address(index.row(), index.column())
+            return "A1"
+        ranges = list(selection)
+        min_row = min(item.top() for item in ranges)
+        max_row = max(item.bottom() for item in ranges)
+        min_column = min(item.left() for item in ranges)
+        max_column = max(item.right() for item in ranges)
+        first = self.cell_address(min_row, min_column)
+        last = self.cell_address(max_row, max_column)
+        return first if first == last else f"{first}:{last}"
+
+    def current_cell_address(self) -> str:
+        if not hasattr(self, "tabs") or not self.tabs.count():
+            return "A1"
+        index = self.current_view.currentIndex()
+        if not index.isValid():
+            return "A1"
+        return self.cell_address(index.row(), index.column())
+
+    def cell_address(self, row: int, column: int) -> str:
+        return index_to_column_name(column) + str(row + 1)
+
+    def formula_context(self, row: int | None = None, column: int | None = None) -> dict[str, str | int]:
+        if row is None or column is None:
+            index = self.current_view.currentIndex() if hasattr(self, "tabs") and self.tabs.count() else QModelIndex()
+            row = index.row() if index.isValid() else 0
+            column = index.column() if index.isValid() else 0
+        return {
+            "cell": self.cell_address(row, column),
+            "range": self.selected_range_reference(),
+            "row": row + 1,
+            "column": index_to_column_name(column),
+        }
+
+    def build_formula_text(self, template: str, row: int | None = None, column: int | None = None) -> str:
+        if not template:
+            return ""
+        try:
+            expression = template.format(**self.formula_context(row, column))
+        except (KeyError, ValueError):
+            expression = template
+        return expression if expression.startswith("=") else f"={expression}"
+
+    def apply_formula_template(self) -> None:
+        formula = self.build_formula_text(self.formula_template_box.currentData() or "")
+        self.apply_formula_to_current_cell(formula)
+
+    def insert_formula_template(self) -> None:
+        formula = self.build_formula_text(self.formula_template_box.currentData() or "")
+        self.formula_input.setText(formula)
+        self.formula_input.setFocus()
+
+    def apply_custom_algorithm(self) -> None:
+        formula = self.build_formula_text(self.custom_algorithm_input.text().strip())
+        self.apply_formula_to_current_cell(formula)
+
+    def fill_selection_with_custom_algorithm(self) -> None:
+        template = self.custom_algorithm_input.text().strip()
+        if not template or not hasattr(self, "tabs") or not self.tabs.count():
+            return
+        selection = self.current_view.selectionModel().selection()
+        if selection.isEmpty():
+            self.apply_custom_algorithm()
+            return
+        values = []
+        for item in list(selection):
+            for row in range(item.top(), item.bottom() + 1):
+                for column in range(item.left(), item.right() + 1):
+                    values.append((row, column, self.build_formula_text(template, row, column)))
+        self.current_model.set_values(values, refresh_dependents=True)
+        self.update_formula_bar()
+        self.update_selection_stats()
+
+    def apply_formula_to_current_cell(self, formula: str) -> None:
+        if not formula:
+            return
+        index = self.current_view.currentIndex()
+        if not index.isValid():
+            index = self.current_model.index(0, 0)
+            self.current_view.setCurrentIndex(index)
+        self.current_model.setData(index, formula, Qt.EditRole)
+        self.formula_input.setText(formula)
+        self.update_selection_stats()
 
     def load_workbook(self, workbook: WorkbookData) -> None:
         self.workbook = workbook
@@ -535,11 +721,13 @@ class SpreadsheetWindow(QMainWindow):
         if index >= 0:
             self.workbook.active_sheet_index = index
             self.update_formula_bar()
+            self.update_formula_preview()
             self.update_window_title()
 
     def on_selection_changed(self, selected: QItemSelection, _deselected: QItemSelection) -> None:
         self.update_formula_bar()
         self.update_selection_stats()
+        self.update_formula_preview()
 
     def update_formula_bar(self) -> None:
         if not self.tabs.count():

@@ -8,6 +8,7 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 - Excel-like top ribbon with modern icons for file, sheet, edit, formatting, and zoom commands.
 - Large-table performance improvements with batched paste/clear operations, partial redraws, and cached formula results.
 - Formula bar with live display and raw formula editing.
+- Formula library for applying arithmetic, statistical, logical, lookup, and custom cell algorithms to the active cell or selected range.
 - Basic formulas: `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, `IF`, `ROUND`, `ABS`, `SQRT`, `POWER`, `CONCAT`, `LEN`, `LEFT`, `RIGHT`, `UPPER`, `LOWER`, `AND`, `OR`, `NOT`, `TODAY`, and `NOW`.
 - Expanded Excel-like formulas: criteria functions such as `SUMIF`, lookup functions such as `VLOOKUP`, statistics, trigonometry, date functions, text functions, `IFERROR`, percentage expressions such as `50%`, and `&` text concatenation.
 - Formula separators can be commas or semicolons, for example `=IF(A1=10; "ok"; "no")`.
@@ -22,7 +23,7 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 ## Formula Coverage
 
 - Math: `SUM`, `PRODUCT`, `ROUND`, `ROUNDUP`, `ROUNDDOWN`, `INT`, `TRUNC`, `CEILING`, `FLOOR`, `MOD`, `ABS`, `SQRT`, `POWER`, `EXP`, `LN`, `LOG`, `LOG10`, `PI`, `RAND`, `RANDBETWEEN`.
-- Statistics: `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `MODE`, `COUNT`, `COUNTA`, `STDEV.S`, `STDEV.P`, `VAR.S`, `VAR.P`.
+- Statistics: `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `MODE`, `COUNT`, `COUNTA`, `STDEV.S`, `STDEV.P`, `VAR.S`, `VAR.P`, `PERCENTILE.INC`, `QUARTILE.INC`, `RANK.EQ`, `CORREL`, `COVARIANCE.P`, `COVARIANCE.S`.
 - Criteria: `SUMIF`, `SUMIFS`, `COUNTIF`, `AVERAGEIF`.
 - Logic: `IF`, `IFS`, `IFERROR`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`.
 - Text: `CONCAT`, `CONCATENATE`, `TEXTJOIN`, `LEN`, `LEFT`, `RIGHT`, `MID`, `UPPER`, `LOWER`, `TRIM`, `PROPER`, `FIND`, `SEARCH`, `SUBSTITUTE`, `REPLACE`, `REPT`.

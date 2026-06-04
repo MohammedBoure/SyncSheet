@@ -88,6 +88,21 @@ class FormulaEvaluatorTest(unittest.TestCase):
         self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 1, 2), 1)
         self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 2, 2), 250)
 
+    def test_advanced_statistical_functions(self):
+        for row, value in enumerate([10, 20, 30, 40, 50]):
+            self.sheet.set_value(row, 0, value)
+            self.sheet.set_value(row, 1, value * 2)
+        self.sheet.set_value(0, 2, "=PERCENTILE.INC(A1:A5, 0.5)")
+        self.sheet.set_value(1, 2, "=QUARTILE.INC(A1:A5, 3)")
+        self.sheet.set_value(2, 2, "=RANK.EQ(40, A1:A5, 0)")
+        self.sheet.set_value(3, 2, "=CORREL(A1:A5, B1:B5)")
+        self.sheet.set_value(4, 2, "=COVARIANCE.P(A1:A5, B1:B5)")
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 2), 30)
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 1, 2), 40)
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 2, 2), 2)
+        self.assertAlmostEqual(self.evaluator.evaluate_cell(self.sheet, 3, 2), 1.0)
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 4, 2), 400.0)
+
     def test_cycle_detection(self):
         self.sheet.set_value(0, 0, "=B1")
         self.sheet.set_value(0, 1, "=A1")
