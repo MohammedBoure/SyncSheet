@@ -40,8 +40,20 @@ class WorksheetData:
     row_count: int = 200
     column_count: int = 52
     cells: dict[tuple[int, int], CellData] = field(default_factory=dict)
+    formula_cells: set[tuple[int, int]] = field(default_factory=set)
     column_widths: dict[int, int] = field(default_factory=dict)
     row_heights: dict[int, int] = field(default_factory=dict)
+    revision: int = 0
+
+    def bump_revision(self) -> None:
+        self.revision += 1
+
+    def track_formula_cell(self, row: int, column: int, value: Any) -> None:
+        key = (row, column)
+        if isinstance(value, str) and value.startswith("="):
+            self.formula_cells.add(key)
+        else:
+            self.formula_cells.discard(key)
 
     def ensure_size(self, row: int, column: int) -> None:
         if row >= self.row_count:
@@ -62,12 +74,22 @@ class WorksheetData:
         cell = self.cells.get((row, column))
         return "" if cell is None else cell.value
 
-    def set_value(self, row: int, column: int, value: Any) -> None:
+    def set_value(self, row: int, column: int, value: Any, *, touch: bool = True) -> bool:
         self.ensure_size(row, column)
-        cell = self.get_cell(row, column)
-        cell.value = "" if value is None else value
+        next_value = "" if value is None else value
+        existing = self.cells.get((row, column))
+        if existing is None and next_value == "":
+            return False
+        cell = existing or self.get_cell(row, column)
+        if cell.value == next_value:
+            return False
+        cell.value = next_value
         if cell.is_empty and cell.style == CellStyle():
             self.cells.pop((row, column), None)
+        self.track_formula_cell(row, column, next_value)
+        if touch:
+            self.bump_revision()
+        return True
 
     def set_style(self, row: int, column: int, **changes: Any) -> None:
         self.ensure_size(row, column)
@@ -75,11 +97,16 @@ class WorksheetData:
         cell.style = cell.style.updated(**changes)
 
     def clear(self, rows: list[int], columns: list[int]) -> None:
+        changed = False
         for row in rows:
             for column in columns:
                 cell = self.cells.get((row, column))
                 if cell is not None:
+                    changed = changed or cell.value != ""
                     cell.value = ""
+                    self.formula_cells.discard((row, column))
+        if changed:
+            self.bump_revision()
 
     def iter_used_cells(self):
         for (row, column), cell in sorted(self.cells.items()):
@@ -92,7 +119,9 @@ class WorksheetData:
             target_row = row + count if row >= start else row
             moved[(target_row, column)] = cell
         self.cells = moved
+        self.formula_cells = {(row + count if row >= start else row, column) for row, column in self.formula_cells}
         self.row_count += count
+        self.bump_revision()
 
     def remove_rows(self, start: int, count: int = 1) -> None:
         moved: dict[tuple[int, int], CellData] = {}
@@ -103,7 +132,13 @@ class WorksheetData:
             target_row = row - count if row >= end else row
             moved[(target_row, column)] = cell
         self.cells = moved
+        self.formula_cells = {
+            (row - count if row >= end else row, column)
+            for row, column in self.formula_cells
+            if not start <= row < end
+        }
         self.row_count = max(1, self.row_count - count)
+        self.bump_revision()
 
     def insert_columns(self, start: int, count: int = 1) -> None:
         moved: dict[tuple[int, int], CellData] = {}
@@ -111,7 +146,9 @@ class WorksheetData:
             target_column = column + count if column >= start else column
             moved[(row, target_column)] = cell
         self.cells = moved
+        self.formula_cells = {(row, column + count if column >= start else column) for row, column in self.formula_cells}
         self.column_count += count
+        self.bump_revision()
 
     def remove_columns(self, start: int, count: int = 1) -> None:
         moved: dict[tuple[int, int], CellData] = {}
@@ -122,7 +159,13 @@ class WorksheetData:
             target_column = column - count if column >= end else column
             moved[(row, target_column)] = cell
         self.cells = moved
+        self.formula_cells = {
+            (row, column - count if column >= end else column)
+            for row, column in self.formula_cells
+            if not start <= column < end
+        }
         self.column_count = max(1, self.column_count - count)
+        self.bump_revision()
 
 
 @dataclass

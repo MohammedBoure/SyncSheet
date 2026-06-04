@@ -48,7 +48,11 @@ def load_xlsx(path: str | Path) -> WorkbookData:
                 if excel_cell.value is None and not excel_cell.has_style:
                     continue
                 style = style_from_openpyxl(excel_cell)
-                sheet_data.cells[(excel_cell.row - 1, excel_cell.column - 1)] = CellData(value="" if excel_cell.value is None else excel_cell.value, style=style)
+                row_index = excel_cell.row - 1
+                column_index = excel_cell.column - 1
+                value = "" if excel_cell.value is None else excel_cell.value
+                sheet_data.cells[(row_index, column_index)] = CellData(value=value, style=style)
+                sheet_data.track_formula_cell(row_index, column_index, value)
         for key, dimension in openpyxl_sheet.column_dimensions.items():
             if dimension.width:
                 sheet_data.column_widths[column_index_from_string(key) - 1] = int(dimension.width)

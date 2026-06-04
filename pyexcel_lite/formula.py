@@ -24,6 +24,7 @@ BOOL_PATTERN = re.compile(r"\b(TRUE|FALSE)\b", re.IGNORECASE)
 EQUALS_PATTERN = re.compile(r"(?<![<>=!])=(?!=)")
 PERCENT_PATTERN = re.compile(r'(\d+(?:\.\d+)?|CELL\("[^"]+"\)|\([^()]*\))%')
 CRITERIA_PATTERN = re.compile(r"^(<=|>=|<>|=|<|>)(.*)$")
+VOLATILE_FUNCTIONS = ("RAND(", "RANDBETWEEN(", "NOW(", "TODAY(")
 
 
 class FormulaError(Exception):
@@ -275,6 +276,11 @@ class FormulaEvaluator:
     def __init__(self, workbook: WorkbookData):
         self.workbook = workbook
         self.functions = self._build_functions()
+        self._formula_cache: dict[tuple[int, int, int, int], Any] = {}
+        self._formula_cache_sheets: dict[int, int] = {}
+        self._parsed_cache: dict[str, ast.AST] = {}
+        self.max_formula_cache_entries = 50000
+        self.max_parsed_cache_entries = 10000
 
     def _build_functions(self) -> dict[str, Callable[..., Any]]:
         return {
@@ -378,7 +384,22 @@ class FormulaEvaluator:
 
     def evaluate_cell(self, sheet: WorksheetData, row: int, column: int, visiting: set[tuple[str, int, int]] | None = None) -> Any:
         raw = sheet.raw_value(row, column)
-        return self.evaluate(raw, sheet, visiting=visiting, cell_position=(row, column))
+        if not isinstance(raw, str) or not raw.startswith("="):
+            return raw
+        self._sync_sheet_cache(sheet)
+        cell_key = (sheet.name, row, column)
+        cache_key = (id(sheet), sheet.revision, row, column)
+        use_cache = not self._is_volatile(raw) and (visiting is None or cell_key not in visiting)
+        if use_cache and cache_key in self._formula_cache:
+            return self._formula_cache[cache_key]
+        result = self.evaluate(raw, sheet, visiting=visiting, cell_position=(row, column))
+        if use_cache:
+            if len(self._formula_cache) > self.max_formula_cache_entries:
+                self._formula_cache.clear()
+                self._formula_cache_sheets.clear()
+                self._formula_cache_sheets[id(sheet)] = sheet.revision
+            self._formula_cache[cache_key] = result
+        return result
 
     def evaluate(
         self,
@@ -395,11 +416,9 @@ class FormulaEvaluator:
             if key in visiting:
                 raise FormulaCycleError("Circular formula reference")
             visiting.add(key)
-        expression = self.prepare_expression(raw_value[1:])
         try:
-            tree = ast.parse(expression, mode="eval")
-            self._validate_ast(tree)
-            return self._eval_node(tree.body, self._environment(sheet, visiting))
+            body = self._parse_formula(raw_value)
+            return self._eval_node(body, self._environment(sheet, visiting))
         except FormulaError:
             raise
         except Exception as exc:
@@ -410,9 +429,43 @@ class FormulaEvaluator:
 
     def display(self, raw_value: Any, sheet: WorksheetData, row: int | None = None, column: int | None = None) -> str:
         try:
+            if row is not None and column is not None and isinstance(raw_value, str) and raw_value.startswith("="):
+                return coerce_display(self.evaluate_cell(sheet, row, column))
             return coerce_display(self.evaluate(raw_value, sheet, cell_position=(row, column) if row is not None and column is not None else None))
         except FormulaError as exc:
             return f"#ERROR: {exc}"
+
+    def invalidate_sheet(self, sheet: WorksheetData | None = None) -> None:
+        if sheet is None:
+            self._formula_cache.clear()
+            self._formula_cache_sheets.clear()
+            return
+        sheet_id = id(sheet)
+        self._formula_cache = {key: value for key, value in self._formula_cache.items() if key[0] != sheet_id}
+        self._formula_cache_sheets.pop(sheet_id, None)
+
+    def _sync_sheet_cache(self, sheet: WorksheetData) -> None:
+        sheet_id = id(sheet)
+        if self._formula_cache_sheets.get(sheet_id) == sheet.revision:
+            return
+        self.invalidate_sheet(sheet)
+        self._formula_cache_sheets[sheet_id] = sheet.revision
+
+    def _is_volatile(self, raw_value: str) -> bool:
+        upper = raw_value.upper()
+        return any(name in upper for name in VOLATILE_FUNCTIONS)
+
+    def _parse_formula(self, raw_value: str) -> ast.AST:
+        cached = self._parsed_cache.get(raw_value)
+        if cached is not None:
+            return cached
+        expression = self.prepare_expression(raw_value[1:])
+        tree = ast.parse(expression, mode="eval")
+        self._validate_ast(tree)
+        if len(self._parsed_cache) > self.max_parsed_cache_entries:
+            self._parsed_cache.clear()
+        self._parsed_cache[raw_value] = tree.body
+        return tree.body
 
     def prepare_expression(self, expression: str) -> str:
         prepared = expression.replace("^", "**")

@@ -554,27 +554,40 @@ class SpreadsheetWindow(QMainWindow):
         self.formula_input.setText(str(self.current_model.data(index, Qt.EditRole) or ""))
 
     def update_selection_stats(self) -> None:
-        indexes = self.current_view.selectedIndexes()
-        if not indexes:
+        selection = self.current_view.selectionModel().selection()
+        if selection.isEmpty():
             self.selection_label.setText("No selection")
             self.stats_label.setText("Sum: 0\nAverage: 0\nCount: 0")
             return
-        rows = [index.row() for index in indexes]
-        columns = [index.column() for index in indexes]
-        first = index_to_column_name(min(columns)) + str(min(rows) + 1)
-        last = index_to_column_name(max(columns)) + str(max(rows) + 1)
-        self.selection_label.setText(f"{first}:{last}\nCells: {len(indexes)}")
+        ranges = list(selection)
+        min_row = min(item.top() for item in ranges)
+        max_row = max(item.bottom() for item in ranges)
+        min_column = min(item.left() for item in ranges)
+        max_column = max(item.right() for item in ranges)
+        cell_count = sum((item.bottom() - item.top() + 1) * (item.right() - item.left() + 1) for item in ranges)
+        first = index_to_column_name(min_column) + str(min_row + 1)
+        last = index_to_column_name(max_column) + str(max_row + 1)
+        self.selection_label.setText(f"{first}:{last}\nCells: {cell_count}")
         numbers = []
-        scanned_indexes = indexes[: self.max_stats_cells]
-        for index in scanned_indexes:
-            try:
-                value = self.evaluator.evaluate_cell(self.current_sheet, index.row(), index.column())
-                numbers.append(to_number(value))
-            except Exception:
-                pass
+        scanned_count = 0
+        for item in ranges:
+            for row in range(item.top(), item.bottom() + 1):
+                for column in range(item.left(), item.right() + 1):
+                    if scanned_count >= self.max_stats_cells:
+                        break
+                    scanned_count += 1
+                    try:
+                        value = self.evaluator.evaluate_cell(self.current_sheet, row, column)
+                        numbers.append(to_number(value))
+                    except Exception:
+                        pass
+                if scanned_count >= self.max_stats_cells:
+                    break
+            if scanned_count >= self.max_stats_cells:
+                break
         total = sum(numbers)
         average = total / len(numbers) if numbers else 0
-        suffix = f"\nScanned: {len(scanned_indexes)} of {len(indexes)}" if len(indexes) > len(scanned_indexes) else ""
+        suffix = f"\nScanned: {scanned_count} of {cell_count}" if cell_count > scanned_count else ""
         self.stats_label.setText(f"Sum: {total:g}\nAverage: {average:g}\nCount: {len(numbers)}{suffix}")
 
     def update_window_title(self) -> None:

@@ -60,24 +60,35 @@ class WorksheetTableModel(QAbstractTableModel):
     def setData(self, index: QModelIndex, value, role: int = Qt.EditRole, refresh_dependents: bool = True) -> bool:
         if role != Qt.EditRole or not index.isValid():
             return False
-        self.sheet.set_value(index.row(), index.column(), "" if value is None else str(value))
+        changed = self.sheet.set_value(index.row(), index.column(), "" if value is None else str(value))
+        if not changed:
+            return True
+        self.evaluator.invalidate_sheet(self.sheet)
         self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
         if refresh_dependents:
-            self.refresh_all()
+            self.refresh_formulas()
         return True
 
     def set_values(self, values: list[tuple[int, int, object]], refresh_dependents: bool = True) -> None:
         if not values:
             return
+        max_row = max(row for row, _column, _value in values)
+        max_column = max(column for _row, column, _value in values)
+        self._ensure_model_size(max_row, max_column)
         top = min(row for row, _column, _value in values)
         bottom = max(row for row, _column, _value in values)
         left = min(column for _row, column, _value in values)
         right = max(column for _row, column, _value in values)
+        changed = False
         for row, column, value in values:
-            self.sheet.set_value(row, column, "" if value is None else str(value))
+            changed = self.sheet.set_value(row, column, "" if value is None else str(value), touch=False) or changed
+        if not changed:
+            return
+        self.sheet.bump_revision()
+        self.evaluator.invalidate_sheet(self.sheet)
         self.dataChanged.emit(self.index(top, left), self.index(bottom, right), [Qt.DisplayRole, Qt.EditRole])
         if refresh_dependents:
-            self.refresh_all()
+            self.refresh_formulas()
 
     def clear_indexes(self, indexes: list[QModelIndex], refresh_dependents: bool = True) -> None:
         values = [(index.row(), index.column(), "") for index in indexes if index.isValid()]
@@ -117,25 +128,56 @@ class WorksheetTableModel(QAbstractTableModel):
         self.beginInsertRows(QModelIndex(), start, start + count - 1)
         self.sheet.insert_rows(start, count)
         self.endInsertRows()
+        self.evaluator.invalidate_sheet(self.sheet)
 
     def remove_rows(self, start: int, count: int = 1) -> None:
         self.beginRemoveRows(QModelIndex(), start, start + count - 1)
         self.sheet.remove_rows(start, count)
         self.endRemoveRows()
+        self.evaluator.invalidate_sheet(self.sheet)
 
     def insert_columns(self, start: int, count: int = 1) -> None:
         self.beginInsertColumns(QModelIndex(), start, start + count - 1)
         self.sheet.insert_columns(start, count)
         self.endInsertColumns()
+        self.evaluator.invalidate_sheet(self.sheet)
 
     def remove_columns(self, start: int, count: int = 1) -> None:
         self.beginRemoveColumns(QModelIndex(), start, start + count - 1)
         self.sheet.remove_columns(start, count)
         self.endRemoveColumns()
+        self.evaluator.invalidate_sheet(self.sheet)
 
     def refresh_all(self) -> None:
         if self.rowCount() and self.columnCount():
             self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1), [Qt.DisplayRole])
+
+    def refresh_formulas(self) -> None:
+        formula_positions = list(self.sheet.formula_cells)
+        if not formula_positions:
+            return
+        if len(formula_positions) <= 150:
+            for row, column in formula_positions:
+                index = self.index(row, column)
+                self.dataChanged.emit(index, index, [Qt.DisplayRole])
+            return
+        top = min(row for row, _column in formula_positions)
+        bottom = max(row for row, _column in formula_positions)
+        left = min(column for _row, column in formula_positions)
+        right = max(column for _row, column in formula_positions)
+        self.dataChanged.emit(self.index(top, left), self.index(bottom, right), [Qt.DisplayRole])
+
+    def _ensure_model_size(self, row: int, column: int) -> None:
+        if row >= self.sheet.row_count:
+            old_count = self.sheet.row_count
+            self.beginInsertRows(QModelIndex(), old_count, row)
+            self.sheet.row_count = row + 1
+            self.endInsertRows()
+        if column >= self.sheet.column_count:
+            old_count = self.sheet.column_count
+            self.beginInsertColumns(QModelIndex(), old_count, column)
+            self.sheet.column_count = column + 1
+            self.endInsertColumns()
 
     def _font_from_style(self, style: CellStyle) -> QFont:
         font = QFont(style.font_family, max(1, round(style.font_size * self.zoom_factor)))
