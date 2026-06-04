@@ -45,6 +45,7 @@ class WorksheetTableModel(QAbstractTableModel):
         self.redo_stack: list[CellChangeCommand] = []
         self.history_limit = 200
         self.history_changed: Callable[[], None] | None = None
+        self.values_changed: Callable[[WorksheetData, list[tuple[int, int, object]]], None] | None = None
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else self.sheet.row_count
@@ -84,7 +85,15 @@ class WorksheetTableModel(QAbstractTableModel):
             return self._alignment_from_style(style)
         return None
 
-    def setData(self, index: QModelIndex, value, role: int = Qt.EditRole, refresh_dependents: bool = True, record_undo: bool = True) -> bool:
+    def setData(
+        self,
+        index: QModelIndex,
+        value,
+        role: int = Qt.EditRole,
+        refresh_dependents: bool = True,
+        record_undo: bool = True,
+        notify_change: bool = True,
+    ) -> bool:
         if role != Qt.EditRole or not index.isValid():
             return False
         old_value = self.sheet.raw_value(index.row(), index.column())
@@ -98,9 +107,17 @@ class WorksheetTableModel(QAbstractTableModel):
         self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
         if refresh_dependents:
             self.refresh_formulas()
+        if notify_change:
+            self._notify_values_changed([(index.row(), index.column(), next_value)])
         return True
 
-    def set_values(self, values: list[tuple[int, int, object]], refresh_dependents: bool = True, record_undo: bool = True) -> None:
+    def set_values(
+        self,
+        values: list[tuple[int, int, object]],
+        refresh_dependents: bool = True,
+        record_undo: bool = True,
+        notify_change: bool = True,
+    ) -> None:
         if not values:
             return
         max_row = max(row for row, _column, _value in values)
@@ -127,6 +144,8 @@ class WorksheetTableModel(QAbstractTableModel):
         self.dataChanged.emit(self.index(top, left), self.index(bottom, right), [Qt.DisplayRole, Qt.EditRole])
         if refresh_dependents:
             self.refresh_formulas()
+        if notify_change and changes:
+            self._notify_values_changed([(row, column, new_value) for row, column, _old_value, new_value in changes])
 
     def clear_indexes(self, indexes: list[QModelIndex], refresh_dependents: bool = True) -> None:
         values = [(index.row(), index.column(), "") for index in indexes if index.isValid()]
@@ -164,6 +183,10 @@ class WorksheetTableModel(QAbstractTableModel):
     def _notify_history_changed(self) -> None:
         if self.history_changed:
             self.history_changed()
+
+    def _notify_values_changed(self, values: list[tuple[int, int, object]]) -> None:
+        if self.values_changed:
+            self.values_changed(self.sheet, values)
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlags:
         if not index.isValid():

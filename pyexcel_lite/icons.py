@@ -188,6 +188,23 @@ def _draw_icon(p: QPainter, name: str, size: int) -> None:
         p.drawRoundedRect(QRectF(14, 9, 3.5, 12), 1, 1)
         p.setBrush(QColor(AMBER))
         p.drawRoundedRect(QRectF(20, 12, 3.5, 9), 1, 1)
+    elif name in {"network_host", "network_join", "network_leave"}:
+        p.setPen(_pen(GREEN, 1.8))
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(QRectF(4, 5, 7, 7))
+        p.drawEllipse(QRectF(17, 5, 7, 7))
+        p.drawEllipse(QRectF(10.5, 17, 7, 7))
+        p.drawLine(QPointF(10, 10), QPointF(14, 18))
+        p.drawLine(QPointF(18, 10), QPointF(15, 18))
+        if name == "network_host":
+            _plus(p, QPointF(14, 14), 3.4, BLUE)
+        elif name == "network_join":
+            p.setPen(_pen(BLUE, 2.1))
+            p.drawLine(QPointF(8, 22), QPointF(19, 22))
+            p.drawLine(QPointF(19, 22), QPointF(15, 18))
+            p.drawLine(QPointF(19, 22), QPointF(15, 26))
+        else:
+            _x(p, QPointF(14, 14), 3.7, RED)
     elif name == "zoom_in":
         _magnifier(p, True)
     elif name == "zoom_out":

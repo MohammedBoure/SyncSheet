@@ -35,6 +35,17 @@ from .cell_address import index_to_column_name
 from .formula import FormulaEvaluator, to_number
 from .icons import app_icon
 from .io_xlsx import export_csv, load_xlsx, save_xlsx
+from .network import (
+    DEFAULT_PORT,
+    CollaborationClient,
+    CollaborationEndpoint,
+    CollaborationServer,
+    cell_update_message,
+    sheet_message,
+    structure_message,
+    workbook_from_payload,
+    workbook_to_payload,
+)
 from .qt_model import WorksheetTableModel
 from .workbook import WorkbookData, WorksheetData
 
@@ -150,6 +161,11 @@ class SpreadsheetWindow(QMainWindow):
         self.current_path: Path | None = None
         self.zoom_percent = 100
         self.max_stats_cells = 5000
+        self.collaboration: CollaborationEndpoint | None = None
+        self.collaboration_role = ""
+        self.collaboration_status = "Offline"
+        self.collaboration_clients = 0
+        self.applying_remote_update = False
         self.setWindowTitle("PyExcel Lite")
         self.resize(1280, 760)
         self._build_actions()
@@ -185,6 +201,10 @@ class SpreadsheetWindow(QMainWindow):
         self.undo_action = QAction("Undo", self, shortcut=QKeySequence.Undo, triggered=self.undo)
         self.redo_action = QAction("Redo", self, shortcut=QKeySequence.Redo, triggered=self.redo)
         self.chart_action = QAction("Chart", self, triggered=self.create_chart_from_selection)
+        self.host_network_action = QAction("Host", self, triggered=self.host_collaboration)
+        self.join_network_action = QAction("Join", self, triggered=self.join_collaboration)
+        self.leave_network_action = QAction("Leave", self, triggered=self.leave_collaboration)
+        self.leave_network_action.setEnabled(False)
         self.zoom_in_action = QAction("Zoom In", self, triggered=self.zoom_in)
         self.zoom_in_action.setShortcuts([QKeySequence("Ctrl++"), QKeySequence("Ctrl+=")])
         self.zoom_out_action = QAction("Zoom Out", self, shortcut=QKeySequence("Ctrl+-"), triggered=self.zoom_out)
@@ -210,6 +230,9 @@ class SpreadsheetWindow(QMainWindow):
             self.undo_action: ("undo", "Undo the last cell edit"),
             self.redo_action: ("redo", "Redo the last undone edit"),
             self.chart_action: ("chart", "Create a chart from the selected cells"),
+            self.host_network_action: ("network_host", "Host a realtime collaboration session"),
+            self.join_network_action: ("network_join", "Join a realtime collaboration session"),
+            self.leave_network_action: ("network_leave", "Leave the collaboration session"),
             self.zoom_in_action: ("zoom_in", "Zoom in"),
             self.zoom_out_action: ("zoom_out", "Zoom out"),
             self.zoom_reset_action: ("zoom_reset", "Reset zoom"),
@@ -253,6 +276,8 @@ class SpreadsheetWindow(QMainWindow):
         view_menu.addActions([self.zoom_in_action, self.zoom_out_action, self.zoom_reset_action])
         insert_menu = self.menuBar().addMenu("Insert")
         insert_menu.addAction(self.chart_action)
+        network_menu = self.menuBar().addMenu("Network")
+        network_menu.addActions([self.host_network_action, self.join_network_action, self.leave_network_action])
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction(self.about_action)
 
@@ -267,6 +292,8 @@ class SpreadsheetWindow(QMainWindow):
         file_bar.addActions([self.add_sheet_action, self.export_csv_action])
         file_bar.addSeparator()
         file_bar.addAction(self.chart_action)
+        file_bar.addSeparator()
+        file_bar.addActions([self.host_network_action, self.join_network_action, self.leave_network_action])
         file_bar.addSeparator()
         file_bar.addActions([self.zoom_out_action, self.zoom_reset_action, self.zoom_in_action])
         self.zoom_box = QSpinBox()
@@ -414,6 +441,10 @@ class SpreadsheetWindow(QMainWindow):
         self.stats_label = QLabel("Sum: 0\nAverage: 0\nCount: 0")
         self.stats_label.setWordWrap(True)
         layout.addWidget(self.stats_label)
+        layout.addWidget(QLabel("Network"))
+        self.network_status_label = QLabel("Offline")
+        self.network_status_label.setWordWrap(True)
+        layout.addWidget(self.network_status_label)
         layout.addWidget(QLabel("Formula Library"))
         self.formula_category_box = QComboBox()
         self.formula_category_box.addItems(FORMULA_LIBRARY.keys())
@@ -640,20 +671,290 @@ class SpreadsheetWindow(QMainWindow):
                         return points
         return points
 
+    def _create_sheet_view(self, sheet: WorksheetData) -> SpreadsheetView:
+        model = WorksheetTableModel(sheet, self.evaluator)
+        model.history_changed = self.update_undo_redo_actions
+        model.values_changed = self.on_local_values_changed
+        view = SpreadsheetView(self)
+        view.setModel(model)
+        self.apply_zoom_to_view(view, model)
+        view.selectionModel().selectionChanged.connect(self.on_selection_changed)
+        return view
+
+    def _insert_sheet_view(self, index: int, sheet: WorksheetData) -> None:
+        view = self._create_sheet_view(sheet)
+        model = view.model()
+        index = max(0, min(index, len(self.models)))
+        self.models.insert(index, model)
+        self.tabs.insertTab(index, view, sheet.name)
+
+    def on_local_values_changed(self, sheet: WorksheetData, values: list[tuple[int, int, object]]) -> None:
+        if self.applying_remote_update or self.collaboration is None:
+            return
+        try:
+            sheet_index = self.workbook.sheets.index(sheet)
+        except ValueError:
+            return
+        self.send_collaboration_message(cell_update_message(sheet_index, sheet.name, values))
+
+    def send_collaboration_message(self, message: dict) -> None:
+        if self.applying_remote_update or self.collaboration is None or not self.collaboration.running:
+            return
+        try:
+            self.collaboration.send(message)
+        except OSError as exc:
+            self.show_collaboration_error(f"Send failed: {exc}")
+
+    def send_collaboration_snapshot(self) -> None:
+        if self.applying_remote_update or not isinstance(self.collaboration, CollaborationServer):
+            return
+        self.send_collaboration_message({"type": "snapshot", "workbook": workbook_to_payload(self.workbook)})
+
+    def host_collaboration(self) -> None:
+        if self.collaboration is not None:
+            self.leave_collaboration()
+        port, ok = QInputDialog.getInt(self, "Host collaboration", "Port", DEFAULT_PORT, 1, 65535)
+        if not ok:
+            return
+        server = CollaborationServer(port=port, snapshot_provider=lambda: workbook_to_payload(self.workbook))
+        self.attach_collaboration(server, "Host")
+        try:
+            server.start()
+        except OSError as exc:
+            server.stop()
+            self.detach_collaboration()
+            QMessageBox.critical(self, "Network failed", str(exc))
+
+    def join_collaboration(self) -> None:
+        if self.collaboration is not None:
+            self.leave_collaboration()
+        target, ok = QInputDialog.getText(self, "Join collaboration", "Host:port", text=f"127.0.0.1:{DEFAULT_PORT}")
+        if not ok or not target.strip():
+            return
+        try:
+            host, port = self.parse_collaboration_target(target.strip())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Join collaboration", str(exc))
+            return
+        client = CollaborationClient(host, port)
+        self.attach_collaboration(client, "Client")
+        client.start()
+
+    def leave_collaboration(self) -> None:
+        if self.collaboration is None:
+            return
+        self.collaboration.stop()
+        self.detach_collaboration()
+        self.statusBar().showMessage("Left collaboration session")
+
+    def attach_collaboration(self, endpoint: CollaborationEndpoint, role: str) -> None:
+        self.collaboration = endpoint
+        self.collaboration_role = role
+        self.collaboration_clients = 0
+        endpoint.message_received.connect(self.on_collaboration_message)
+        endpoint.status_changed.connect(self.update_collaboration_status)
+        endpoint.error_occurred.connect(self.show_collaboration_error)
+        endpoint.client_count_changed.connect(self.update_collaboration_client_count)
+        self.update_collaboration_status("Starting")
+        self.update_collaboration_actions()
+
+    def detach_collaboration(self) -> None:
+        endpoint = self.collaboration
+        if endpoint is not None:
+            for signal, slot in (
+                (endpoint.message_received, self.on_collaboration_message),
+                (endpoint.status_changed, self.update_collaboration_status),
+                (endpoint.error_occurred, self.show_collaboration_error),
+                (endpoint.client_count_changed, self.update_collaboration_client_count),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass
+        self.collaboration = None
+        self.collaboration_role = ""
+        self.collaboration_clients = 0
+        self.update_collaboration_status("Offline")
+        self.update_collaboration_actions()
+
+    def parse_collaboration_target(self, text: str) -> tuple[str, int]:
+        if ":" not in text:
+            return text, DEFAULT_PORT
+        host, port_text = text.rsplit(":", 1)
+        host = host.strip()
+        if not host:
+            raise ValueError("Host is required.")
+        try:
+            port = int(port_text)
+        except ValueError as exc:
+            raise ValueError("Port must be a number.") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError("Port must be between 1 and 65535.")
+        return host, port
+
+    def update_collaboration_status(self, status: str) -> None:
+        self.collaboration_status = status
+        if hasattr(self, "network_status_label"):
+            if self.collaboration_role == "Host":
+                text = f"Host: {status}\nClients: {self.collaboration_clients}"
+            elif self.collaboration_role == "Client":
+                text = f"Client: {status}"
+            else:
+                text = "Offline"
+            self.network_status_label.setText(text)
+        if self.statusBar():
+            self.statusBar().showMessage(status)
+
+    def update_collaboration_client_count(self, count: int) -> None:
+        self.collaboration_clients = count
+        self.update_collaboration_status(self.collaboration_status)
+
+    def update_collaboration_actions(self) -> None:
+        online = self.collaboration is not None
+        self.host_network_action.setEnabled(not online)
+        self.join_network_action.setEnabled(not online)
+        self.leave_network_action.setEnabled(online)
+
+    def show_collaboration_error(self, message: str) -> None:
+        self.update_collaboration_status(message)
+        if self.statusBar():
+            self.statusBar().showMessage(message)
+
+    def on_collaboration_message(self, message: dict) -> None:
+        message_type = message.get("type")
+        try:
+            if message_type == "snapshot":
+                self.apply_remote_snapshot(message)
+            elif message_type == "cell_update":
+                self.apply_remote_cell_update(message)
+            elif message_type == "sheet_add":
+                self.apply_remote_sheet_add(message)
+            elif message_type == "sheet_rename":
+                self.apply_remote_sheet_rename(message)
+            elif message_type == "sheet_delete":
+                self.apply_remote_sheet_delete(message)
+            elif message_type in {"insert_rows", "remove_rows", "insert_columns", "remove_columns"}:
+                self.apply_remote_structure_update(message)
+        except Exception as exc:
+            self.show_collaboration_error(f"Network update failed: {exc}")
+
+    def apply_remote_snapshot(self, message: dict) -> None:
+        payload = message.get("workbook", {})
+        self.applying_remote_update = True
+        try:
+            self.load_workbook(workbook_from_payload(payload))
+        finally:
+            self.applying_remote_update = False
+        self.update_formula_bar()
+        self.update_selection_stats()
+        self.statusBar().showMessage("Workbook synchronized")
+
+    def apply_remote_cell_update(self, message: dict) -> None:
+        model = self.remote_model(message, create=True)
+        if model is None:
+            return
+        values = [
+            (int(item.get("row", 0) or 0), int(item.get("column", 0) or 0), item.get("value", ""))
+            for item in message.get("values", [])
+        ]
+        self.applying_remote_update = True
+        try:
+            model.set_values(values, refresh_dependents=True, record_undo=False, notify_change=False)
+        finally:
+            self.applying_remote_update = False
+        if model is self.current_model:
+            self.update_formula_bar()
+            self.update_selection_stats()
+        self.statusBar().showMessage(f"Remote update: {model.sheet.name}")
+
+    def apply_remote_sheet_add(self, message: dict) -> None:
+        name = str(message.get("sheet_name") or self.workbook.unique_sheet_name())
+        if self.workbook.sheet_by_name(name) is not None:
+            return
+        index = max(0, min(int(message.get("sheet_index", len(self.workbook.sheets)) or 0), len(self.workbook.sheets)))
+        sheet = WorksheetData(name=name)
+        self.applying_remote_update = True
+        try:
+            self.workbook.sheets.insert(index, sheet)
+            self._insert_sheet_view(index, sheet)
+        finally:
+            self.applying_remote_update = False
+        self.update_undo_redo_actions()
+        self.statusBar().showMessage(f"Remote sheet added: {name}")
+
+    def apply_remote_sheet_rename(self, message: dict) -> None:
+        model = self.remote_model(message)
+        if model is None:
+            return
+        name = str(message.get("sheet_name") or model.sheet.name)
+        model.sheet.name = name
+        self.tabs.setTabText(self.models.index(model), name)
+        self.statusBar().showMessage(f"Remote sheet renamed: {name}")
+
+    def apply_remote_sheet_delete(self, message: dict) -> None:
+        if len(self.workbook.sheets) == 1:
+            return
+        model = self.remote_model(message)
+        if model is None:
+            return
+        index = self.models.index(model)
+        self.applying_remote_update = True
+        try:
+            self.workbook.remove_sheet(index)
+            self.tabs.removeTab(index)
+            self.models.pop(index)
+        finally:
+            self.applying_remote_update = False
+        self.update_undo_redo_actions()
+        self.statusBar().showMessage("Remote sheet deleted")
+
+    def apply_remote_structure_update(self, message: dict) -> None:
+        model = self.remote_model(message)
+        if model is None:
+            return
+        start = int(message.get("start", 0) or 0)
+        count = max(1, int(message.get("count", 1) or 1))
+        self.applying_remote_update = True
+        try:
+            message_type = message.get("type")
+            if message_type == "insert_rows":
+                model.insert_rows(start, count)
+            elif message_type == "remove_rows":
+                model.remove_rows(start, count)
+            elif message_type == "insert_columns":
+                model.insert_columns(start, count)
+            elif message_type == "remove_columns":
+                model.remove_columns(start, count)
+        finally:
+            self.applying_remote_update = False
+        self.statusBar().showMessage(f"Remote structure update: {model.sheet.name}")
+
+    def remote_model(self, message: dict, create: bool = False) -> WorksheetTableModel | None:
+        raw_index = message.get("sheet_index", -1)
+        try:
+            sheet_index = int(raw_index)
+        except (TypeError, ValueError):
+            sheet_index = -1
+        if 0 <= sheet_index < len(self.models):
+            return self.models[sheet_index]
+        sheet_name = str(message.get("sheet_name") or "")
+        sheet = self.workbook.sheet_by_name(sheet_name) if sheet_name else None
+        if sheet is not None:
+            return self.models[self.workbook.sheets.index(sheet)]
+        if not create:
+            return None
+        sheet = WorksheetData(name=sheet_name or self.workbook.unique_sheet_name())
+        self.workbook.sheets.append(sheet)
+        self._insert_sheet_view(len(self.models), sheet)
+        return self.models[-1]
+
     def load_workbook(self, workbook: WorkbookData) -> None:
         self.workbook = workbook
         self.evaluator = FormulaEvaluator(self.workbook)
         self.models.clear()
         self.tabs.clear()
         for sheet in workbook.sheets:
-            model = WorksheetTableModel(sheet, self.evaluator)
-            model.history_changed = self.update_undo_redo_actions
-            view = SpreadsheetView(self)
-            view.setModel(model)
-            self.apply_zoom_to_view(view, model)
-            view.selectionModel().selectionChanged.connect(self.on_selection_changed)
-            self.models.append(model)
-            self.tabs.addTab(view, sheet.name)
+            self._insert_sheet_view(len(self.models), sheet)
         self.tabs.setCurrentIndex(workbook.active_sheet_index)
         self.current_path = Path(workbook.path) if workbook.path else None
         self.update_window_title()
@@ -661,6 +962,7 @@ class SpreadsheetWindow(QMainWindow):
 
     def new_file(self) -> None:
         self.load_workbook(WorkbookData())
+        self.send_collaboration_snapshot()
         self.statusBar().showMessage("New workbook created")
 
     def open_file(self) -> None:
@@ -669,6 +971,7 @@ class SpreadsheetWindow(QMainWindow):
             return
         try:
             self.load_workbook(load_xlsx(path))
+            self.send_collaboration_snapshot()
             self.statusBar().showMessage(f"Opened {path}")
         except Exception as exc:
             QMessageBox.critical(self, "Open failed", str(exc))
@@ -709,32 +1012,29 @@ class SpreadsheetWindow(QMainWindow):
 
     def add_sheet(self) -> None:
         sheet = self.workbook.add_sheet()
-        model = WorksheetTableModel(sheet, self.evaluator)
-        model.history_changed = self.update_undo_redo_actions
-        view = SpreadsheetView(self)
-        view.setModel(model)
-        self.apply_zoom_to_view(view, model)
-        view.selectionModel().selectionChanged.connect(self.on_selection_changed)
-        self.models.append(model)
-        self.tabs.addTab(view, sheet.name)
-        self.tabs.setCurrentWidget(view)
+        self._insert_sheet_view(len(self.models), sheet)
+        self.tabs.setCurrentIndex(len(self.models) - 1)
         self.update_undo_redo_actions()
+        self.send_collaboration_message(sheet_message("sheet_add", len(self.workbook.sheets) - 1, sheet.name))
 
     def rename_sheet(self) -> None:
         text, ok = QInputDialog.getText(self, "Rename sheet", "Sheet name", text=self.current_sheet.name)
         if ok and text.strip():
             self.current_sheet.name = text.strip()
             self.tabs.setTabText(self.tabs.currentIndex(), self.current_sheet.name)
+            self.send_collaboration_message(sheet_message("sheet_rename", self.tabs.currentIndex(), self.current_sheet.name))
 
     def delete_sheet(self) -> None:
         if len(self.workbook.sheets) == 1:
             QMessageBox.information(self, "Delete sheet", "A workbook must keep at least one sheet.")
             return
         index = self.tabs.currentIndex()
+        sheet_name = self.current_sheet.name
         self.workbook.remove_sheet(index)
         self.tabs.removeTab(index)
         self.models.pop(index)
         self.update_undo_redo_actions()
+        self.send_collaboration_message(sheet_message("sheet_delete", index, sheet_name))
 
     def undo(self) -> None:
         if not self.tabs.count():
@@ -758,21 +1058,35 @@ class SpreadsheetWindow(QMainWindow):
 
     def insert_row(self) -> None:
         row = self.current_view.currentIndex().row()
-        self.current_model.insert_rows(max(row, 0), 1)
+        start = max(row, 0)
+        sheet_index = self.tabs.currentIndex()
+        sheet_name = self.current_sheet.name
+        self.current_model.insert_rows(start, 1)
+        self.send_collaboration_message(structure_message("insert_rows", sheet_index, sheet_name, start, 1))
 
     def delete_row(self) -> None:
         row = self.current_view.currentIndex().row()
         if row >= 0:
+            sheet_index = self.tabs.currentIndex()
+            sheet_name = self.current_sheet.name
             self.current_model.remove_rows(row, 1)
+            self.send_collaboration_message(structure_message("remove_rows", sheet_index, sheet_name, row, 1))
 
     def insert_column(self) -> None:
         column = self.current_view.currentIndex().column()
-        self.current_model.insert_columns(max(column, 0), 1)
+        start = max(column, 0)
+        sheet_index = self.tabs.currentIndex()
+        sheet_name = self.current_sheet.name
+        self.current_model.insert_columns(start, 1)
+        self.send_collaboration_message(structure_message("insert_columns", sheet_index, sheet_name, start, 1))
 
     def delete_column(self) -> None:
         column = self.current_view.currentIndex().column()
         if column >= 0:
+            sheet_index = self.tabs.currentIndex()
+            sheet_name = self.current_sheet.name
             self.current_model.remove_columns(column, 1)
+            self.send_collaboration_message(structure_message("remove_columns", sheet_index, sheet_name, column, 1))
 
     def clear_cells(self) -> None:
         self.current_view.clear_selection()
@@ -899,8 +1213,13 @@ class SpreadsheetWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About PyExcel Lite",
-            "PyExcel Lite\n\nA PySide6 spreadsheet sample with formulas, formatting, multiple sheets, XLSX save/load, CSV export, and clipboard editing.",
+            "PyExcel Lite\n\nA PySide6 spreadsheet sample with formulas, formatting, multiple sheets, XLSX save/load, CSV export, clipboard editing, and realtime LAN collaboration.",
         )
+
+    def closeEvent(self, event) -> None:
+        if self.collaboration is not None:
+            self.collaboration.stop()
+        super().closeEvent(event)
 
 
 def main() -> int:
