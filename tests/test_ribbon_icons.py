@@ -4,7 +4,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea, QTabWidget, QToolButton
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea, QSplitter, QTabWidget, QToolButton
 
 from pyexcel_lite.main import SpreadsheetWindow
 
@@ -58,6 +58,7 @@ class RibbonIconTest(unittest.TestCase):
         try:
             self.assertIsInstance(window.ribbon, QTabWidget)
             self.assertEqual(window.ribbon.objectName(), "excelRibbon")
+            self.assertLessEqual(window.ribbon.maximumHeight(), 142)
             self.assertEqual(
                 [window.ribbon.tabText(index) for index in range(window.ribbon.count())],
                 ["Home", "Project", "Insert", "Formulas", "Data", "View", "Network"],
@@ -68,12 +69,35 @@ class RibbonIconTest(unittest.TestCase):
         finally:
             window.close()
 
-    def test_former_sidebar_is_top_panel_with_section_cards_and_icons(self):
+    def test_layout_uses_formula_bar_and_right_task_pane(self):
+        window = SpreadsheetWindow()
+        try:
+            central_layout = window.centralWidget().layout()
+            self.assertEqual(central_layout.itemAt(0).widget().objectName(), "excelRibbon")
+            self.assertEqual(central_layout.itemAt(1).widget().objectName(), "formulaBar")
+
+            workspace = central_layout.itemAt(2).widget()
+            self.assertIsInstance(workspace, QSplitter)
+            self.assertEqual(workspace.objectName(), "sheetWorkspace")
+            self.assertIs(workspace.widget(0), window.tabs)
+            self.assertIs(workspace.widget(1), window.inspector)
+
+            self.assertIsInstance(window.formula_bar, QFrame)
+            self.assertEqual(window.formula_bar.objectName(), "formulaBar")
+            self.assertEqual(window.name_box.objectName(), "nameBox")
+            self.assertEqual(window.formula_input.objectName(), "formulaInput")
+        finally:
+            window.close()
+
+    def test_task_pane_keeps_section_cards_and_icons(self):
         window = SpreadsheetWindow()
         try:
             self.assertIsInstance(window.inspector, QScrollArea)
             self.assertEqual(window.inspector.objectName(), "inspectorPanel")
-            self.assertLess(window.inspector.height(), window.height())
+            self.assertTrue(window.inspector.widgetResizable())
+            self.assertLessEqual(window.inspector.maximumWidth(), 380)
+            self.assertEqual(window.inspector.horizontalScrollBarPolicy(), Qt.ScrollBarAlwaysOff)
+            self.assertEqual(window.inspector.verticalScrollBarPolicy(), Qt.ScrollBarAsNeeded)
 
             sections = window.inspector.findChildren(QFrame, "inspectorSection")
             titles = [label.text() for label in window.inspector.findChildren(QLabel, "inspectorSectionTitle")]

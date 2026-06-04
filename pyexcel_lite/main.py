@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFontComboBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QScrollArea,
+    QSplitter,
     QSpinBox,
     QStatusBar,
     QTableView,
@@ -63,6 +65,7 @@ from .project import (
 )
 from .qt_model import WorksheetTableModel
 from .settings import StartupSettings, load_startup_settings, save_startup_settings
+from .theme import APP_STYLESHEET
 from .workbook import WorkbookData, WorksheetData
 
 FORMULA_LIBRARY = {
@@ -333,11 +336,21 @@ class SpreadsheetWindow(QMainWindow):
         self._apply_ribbon_style()
 
         self.ribbon = self._build_ribbon()
-        self.inspector = self._build_inspector()
+        self.formula_bar = self._build_formula_bar()
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(False)
         self.tabs.setMovable(True)
         self.tabs.currentChanged.connect(self.on_tab_changed)
+        self.inspector = self._build_inspector()
+
+        workspace = QSplitter(Qt.Horizontal)
+        workspace.setObjectName("sheetWorkspace")
+        workspace.setChildrenCollapsible(False)
+        workspace.addWidget(self.tabs)
+        workspace.addWidget(self.inspector)
+        workspace.setStretchFactor(0, 1)
+        workspace.setStretchFactor(1, 0)
+        workspace.setSizes([980, 320])
 
         central = QWidget()
         central.setObjectName("mainSurface")
@@ -345,8 +358,8 @@ class SpreadsheetWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.ribbon)
-        layout.addWidget(self.inspector)
-        layout.addWidget(self.tabs, 1)
+        layout.addWidget(self.formula_bar)
+        layout.addWidget(workspace, 1)
         self.setCentralWidget(central)
 
         self.setStatusBar(QStatusBar())
@@ -387,7 +400,7 @@ class SpreadsheetWindow(QMainWindow):
         ribbon.setObjectName("excelRibbon")
         ribbon.setDocumentMode(True)
         ribbon.setTabPosition(QTabWidget.North)
-        ribbon.setMaximumHeight(172)
+        ribbon.setMaximumHeight(142)
         ribbon.addTab(self._home_ribbon_page(), "Home")
         ribbon.addTab(self._project_ribbon_page(), "Project")
         ribbon.addTab(self._insert_ribbon_page(), "Insert")
@@ -401,19 +414,19 @@ class SpreadsheetWindow(QMainWindow):
         page = QWidget()
         page.setObjectName("ribbonPage")
         layout = QHBoxLayout(page)
-        layout.setContentsMargins(8, 7, 8, 7)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(7)
         return page, layout
 
     def _ribbon_group(self, parent_layout: QHBoxLayout, title: str) -> QHBoxLayout:
         frame = QFrame()
         frame.setObjectName("ribbonGroup")
         frame_layout = QVBoxLayout(frame)
-        frame_layout.setContentsMargins(8, 5, 8, 4)
-        frame_layout.setSpacing(4)
+        frame_layout.setContentsMargins(7, 4, 7, 3)
+        frame_layout.setSpacing(3)
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(5)
+        controls.setSpacing(4)
         label = QLabel(title)
         label.setObjectName("ribbonGroupTitle")
         label.setAlignment(Qt.AlignCenter)
@@ -515,30 +528,44 @@ class SpreadsheetWindow(QMainWindow):
         layout.addStretch(1)
         return page
 
-    def _formulas_ribbon_page(self) -> QWidget:
-        page, layout = self._ribbon_page()
-        formula_bar = self._ribbon_group(layout, "Formula Bar")
+    def _build_formula_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setObjectName("formulaBar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(6)
+
         self.name_box = QLineEdit()
+        self.name_box.setObjectName("nameBox")
         self.name_box.setReadOnly(True)
         self.name_box.setFixedWidth(90)
+        self.name_box.setPlaceholderText("A1")
+
+        formula_icon = QToolButton()
+        formula_icon.setObjectName("formulaBarIcon")
+        formula_icon.setIcon(app_icon("formula"))
+        formula_icon.setAutoRaise(True)
+        formula_icon.setToolTip("Formula bar")
+
         self.formula_input = QLineEdit()
+        self.formula_input.setObjectName("formulaInput")
         self.formula_input.setPlaceholderText("Type a value or formula, for example =SUM(A1:A5)")
         self.formula_input.returnPressed.connect(self.commit_formula_bar)
-        self.formula_input.setMinimumWidth(420)
-        formula_bar.addWidget(self._ribbon_small_label("Cell"))
-        formula_bar.addWidget(self.name_box)
-        formula_icon = QToolButton()
-        formula_icon.setObjectName("ribbonButton")
-        formula_icon.setIcon(app_icon("formula"))
-        formula_icon.setAutoRaise(False)
-        formula_icon.setToolTip("Formula bar")
-        formula_bar.addWidget(formula_icon)
-        formula_bar.addWidget(self.formula_input)
 
-        library = self._ribbon_group(layout, "Library")
+        layout.addWidget(self.name_box)
+        layout.addWidget(formula_icon)
+        layout.addWidget(self.formula_input, 1)
+        return bar
+
+    def _formulas_ribbon_page(self) -> QWidget:
+        page, layout = self._ribbon_page()
+        library = self._ribbon_group(layout, "Function Library")
         library.addWidget(self._ribbon_callback_button("Apply", "formula", self.apply_formula_template))
         library.addWidget(self._ribbon_callback_button("Insert", "formula", self.insert_formula_template))
-        library.addWidget(self._ribbon_callback_button("Fill", "formula", self.fill_selection_with_custom_algorithm))
+
+        algorithms = self._ribbon_group(layout, "Cell Algorithms")
+        algorithms.addWidget(self._ribbon_callback_button("Apply", "formula", self.apply_custom_algorithm))
+        algorithms.addWidget(self._ribbon_callback_button("Fill", "formula", self.fill_selection_with_custom_algorithm))
         layout.addStretch(1)
         return page
 
@@ -585,206 +612,7 @@ class SpreadsheetWindow(QMainWindow):
         return page
 
     def _apply_ribbon_style(self) -> None:
-        self.setStyleSheet(
-            """
-            QToolBar {
-                background: #f8fafc;
-                border: 0;
-                border-bottom: 1px solid #d0d7de;
-                spacing: 5px;
-                padding: 5px 7px;
-            }
-            QToolBar::separator {
-                background: #d8dee4;
-                width: 1px;
-                margin: 5px 7px;
-            }
-            QToolBar QToolButton {
-                border: 1px solid transparent;
-                border-radius: 7px;
-                color: #1f2937;
-                min-width: 48px;
-                padding: 4px 6px;
-            }
-            QToolBar QToolButton:hover {
-                background: #eef7f1;
-                border-color: #a8d5ba;
-            }
-            QToolBar QToolButton:pressed,
-            QToolBar QToolButton:checked {
-                background: #dff3e8;
-                border-color: #107c41;
-            }
-            QToolBar QComboBox,
-            QToolBar QSpinBox,
-            QToolBar QLineEdit,
-            QToolBar QFontComboBox {
-                border: 1px solid #cfd7df;
-                border-radius: 6px;
-                padding: 4px 7px;
-                background: #ffffff;
-            }
-            QTabWidget#excelRibbon {
-                background: #ffffff;
-                border: 0;
-            }
-            QTabWidget#excelRibbon::pane {
-                background: #f8fafc;
-                border: 0;
-                border-top: 1px solid #d0d7de;
-                border-bottom: 1px solid #cfd7df;
-            }
-            QTabWidget#excelRibbon QTabBar::tab {
-                background: #ffffff;
-                color: #1f2937;
-                padding: 7px 17px;
-                border: 0;
-                border-right: 1px solid #e5e7eb;
-            }
-            QTabWidget#excelRibbon QTabBar::tab:selected {
-                color: #107c41;
-                background: #f8fafc;
-                border-bottom: 2px solid #107c41;
-                font-weight: 600;
-            }
-            QWidget#ribbonPage {
-                background: #f8fafc;
-            }
-            QFrame#ribbonGroup {
-                background: #ffffff;
-                border: 1px solid #d8dee4;
-                border-radius: 7px;
-            }
-            QLabel#ribbonGroupTitle {
-                color: #6b7280;
-                font-size: 10px;
-            }
-            QLabel#ribbonInlineLabel {
-                color: #4b5563;
-                font-size: 11px;
-            }
-            QToolButton#ribbonButton {
-                border: 1px solid transparent;
-                border-radius: 6px;
-                color: #1f2937;
-                min-width: 44px;
-                padding: 5px 7px;
-                background: #ffffff;
-            }
-            QToolButton#ribbonButton:hover {
-                background: #eef7f1;
-                border-color: #a8d5ba;
-            }
-            QToolButton#ribbonButton:pressed,
-            QToolButton#ribbonButton:checked {
-                background: #dff3e8;
-                border-color: #107c41;
-            }
-            QFrame#ribbonGroup QComboBox,
-            QFrame#ribbonGroup QSpinBox,
-            QFrame#ribbonGroup QLineEdit,
-            QFrame#ribbonGroup QFontComboBox {
-                border: 1px solid #cfd7df;
-                border-radius: 6px;
-                padding: 5px 7px;
-                background: #ffffff;
-                color: #111827;
-            }
-            QMenuBar {
-                background: #ffffff;
-                border-bottom: 1px solid #e5e7eb;
-            }
-            QMenu#cellContextMenu,
-            QMenu#cellContextFormulasMenu {
-                background: #ffffff;
-                border: 1px solid #d0d7de;
-                padding: 5px;
-                color: #1f2937;
-            }
-            QMenu#cellContextMenu::item,
-            QMenu#cellContextFormulasMenu::item {
-                padding: 7px 30px 7px 24px;
-                border-radius: 5px;
-            }
-            QMenu#cellContextMenu::item:selected,
-            QMenu#cellContextFormulasMenu::item:selected {
-                background: #dff3e8;
-                color: #0b5f32;
-            }
-            QMenu#cellContextMenu::separator,
-            QMenu#cellContextFormulasMenu::separator {
-                height: 1px;
-                background: #e5e7eb;
-                margin: 5px 4px;
-            }
-            QStatusBar {
-                background: #f8fafc;
-            }
-            QScrollArea#inspectorPanel {
-                background: #f6f8fa;
-                border: 0;
-                border-bottom: 1px solid #d0d7de;
-            }
-            QWidget#inspectorContent {
-                background: #f6f8fa;
-            }
-            QFrame#inspectorSection {
-                background: #ffffff;
-                border: 1px solid #d8dee4;
-                border-radius: 8px;
-            }
-            QLabel#inspectorSectionTitle {
-                color: #111827;
-                font-weight: 600;
-                font-size: 12px;
-            }
-            QLabel#inspectorValue {
-                background: #f8fafc;
-                border: 1px solid #e5e7eb;
-                border-radius: 6px;
-                color: #374151;
-                padding: 7px;
-            }
-            QFrame#inspectorSection QComboBox,
-            QFrame#inspectorSection QLineEdit {
-                border: 1px solid #cfd7df;
-                border-radius: 6px;
-                padding: 6px 8px;
-                background: #ffffff;
-                color: #111827;
-            }
-            QToolButton#sidebarButton {
-                border: 1px solid #cfd7df;
-                border-radius: 6px;
-                background: #ffffff;
-                color: #1f2937;
-                padding: 6px 8px;
-            }
-            QToolButton#sidebarButton:hover {
-                background: #eef7f1;
-                border-color: #a8d5ba;
-            }
-            QToolButton#sidebarButton:pressed {
-                background: #dff3e8;
-                border-color: #107c41;
-            }
-            QTreeWidget#projectTree {
-                background: #ffffff;
-                border: 1px solid #e5e7eb;
-                border-radius: 6px;
-                color: #1f2937;
-                padding: 3px;
-            }
-            QTreeWidget#projectTree::item {
-                min-height: 20px;
-                padding: 2px 4px;
-            }
-            QTreeWidget#projectTree::item:selected {
-                background: #dff3e8;
-                color: #0b5f32;
-            }
-            """
-        )
+        self.setStyleSheet(APP_STYLESHEET)
 
     def _format_button(self, text: str, icon_name: str, tooltip: str, callback) -> QToolButton:
         button = QToolButton()
@@ -841,26 +669,35 @@ class SpreadsheetWindow(QMainWindow):
         button.setDefaultAction(action)
         button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         button.setAutoRaise(False)
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         return button
+
+    def _sidebar_action_grid(self, actions: tuple[QAction, ...]) -> QGridLayout:
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        for index, action in enumerate(actions):
+            grid.addWidget(self._sidebar_action_button(action), index // 2, index % 2)
+        return grid
 
     def _build_inspector(self) -> QWidget:
         scroll = QScrollArea()
         scroll.setObjectName("inspectorPanel")
-        scroll.setWidgetResizable(False)
+        scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setFixedHeight(258)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(300)
+        scroll.setMaximumWidth(380)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         widget = QWidget()
         widget.setObjectName("inspectorContent")
-        widget.setMinimumWidth(2100)
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         selection_section, selection_layout = self._inspector_section("Selection", "selection")
-        selection_section.setFixedWidth(210)
         self.selection_label = QLabel("No selection")
         self.selection_label.setObjectName("inspectorValue")
         self.selection_label.setWordWrap(True)
@@ -868,7 +705,6 @@ class SpreadsheetWindow(QMainWindow):
         layout.addWidget(selection_section)
 
         stats_section, stats_layout = self._inspector_section("Quick Stats", "stats")
-        stats_section.setFixedWidth(210)
         self.stats_label = QLabel("Sum: 0\nAverage: 0\nCount: 0")
         self.stats_label.setObjectName("inspectorValue")
         self.stats_label.setWordWrap(True)
@@ -876,42 +712,47 @@ class SpreadsheetWindow(QMainWindow):
         layout.addWidget(stats_section)
 
         network_section, network_layout = self._inspector_section("Network", "network_host")
-        network_section.setFixedWidth(300)
         self.network_status_label = QLabel("Offline")
         self.network_status_label.setObjectName("inspectorValue")
         self.network_status_label.setWordWrap(True)
-        network_buttons = QHBoxLayout()
-        network_buttons.setContentsMargins(0, 0, 0, 0)
-        network_buttons.setSpacing(6)
-        for action in (self.host_network_action, self.join_network_action, self.leave_network_action, self.startup_network_action):
-            network_buttons.addWidget(self._sidebar_action_button(action))
         network_layout.addWidget(self.network_status_label)
-        network_layout.addLayout(network_buttons)
+        network_layout.addLayout(
+            self._sidebar_action_grid(
+                (
+                    self.host_network_action,
+                    self.join_network_action,
+                    self.leave_network_action,
+                    self.startup_network_action,
+                )
+            )
+        )
         layout.addWidget(network_section)
 
         project_section, project_layout = self._inspector_section("Project", "project")
-        project_section.setFixedWidth(380)
         self.project_summary_label = QLabel("No project")
         self.project_summary_label.setObjectName("inspectorValue")
         self.project_summary_label.setWordWrap(True)
         self.project_tree = QTreeWidget()
         self.project_tree.setObjectName("projectTree")
         self.project_tree.setHeaderHidden(True)
-        self.project_tree.setFixedHeight(92)
+        self.project_tree.setMinimumHeight(132)
         self.project_tree.itemSelectionChanged.connect(self.update_project_actions)
         self.project_tree.itemDoubleClicked.connect(lambda _item, _column: self.open_selected_project_file())
-        project_buttons = QHBoxLayout()
-        project_buttons.setContentsMargins(0, 0, 0, 0)
-        project_buttons.setSpacing(6)
-        for action in (self.open_project_action, self.refresh_project_action, self.open_project_file_action, self.share_project_action):
-            project_buttons.addWidget(self._sidebar_action_button(action))
         project_layout.addWidget(self.project_summary_label)
         project_layout.addWidget(self.project_tree)
-        project_layout.addLayout(project_buttons)
+        project_layout.addLayout(
+            self._sidebar_action_grid(
+                (
+                    self.open_project_action,
+                    self.refresh_project_action,
+                    self.open_project_file_action,
+                    self.share_project_action,
+                )
+            )
+        )
         layout.addWidget(project_section)
 
         formula_section, formula_layout = self._inspector_section("Formula Library", "formula")
-        formula_section.setFixedWidth(300)
         self.formula_category_box = QComboBox()
         self.formula_category_box.addItems(FORMULA_LIBRARY.keys())
         self.formula_category_box.currentTextChanged.connect(self.reload_formula_templates)
@@ -942,7 +783,6 @@ class SpreadsheetWindow(QMainWindow):
         layout.addWidget(formula_section)
 
         algorithm_section, algorithm_layout = self._inspector_section("Cell Algorithm", "formula")
-        algorithm_section.setFixedWidth(250)
         self.custom_algorithm_input = QLineEdit()
         self.custom_algorithm_input.setPlaceholderText("=A{row}*2")
         custom_buttons = QHBoxLayout()
@@ -969,7 +809,6 @@ class SpreadsheetWindow(QMainWindow):
         self.reload_formula_templates()
 
         chart_section, chart_layout = self._inspector_section("Charts", "chart")
-        chart_section.setFixedWidth(390)
         self.chart_type_box = QComboBox()
         self.chart_type_box.addItems(["Bar", "Line", "Pie"])
         self.chart_title_input = QLineEdit()
@@ -981,8 +820,8 @@ class SpreadsheetWindow(QMainWindow):
         self.create_chart_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.create_chart_button.clicked.connect(self.create_chart_from_selection)
         self.chart_widget = ChartWidget()
-        self.chart_widget.setMinimumHeight(112)
-        self.chart_widget.setMaximumHeight(112)
+        self.chart_widget.setMinimumHeight(150)
+        self.chart_widget.setMaximumHeight(180)
         chart_layout.addWidget(self.chart_type_box)
         chart_layout.addWidget(self.chart_title_input)
         chart_layout.addWidget(self.create_chart_button)
