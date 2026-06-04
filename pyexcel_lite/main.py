@@ -2076,14 +2076,15 @@ class SpreadsheetWindow(QMainWindow):
         thread.start()
 
     def update_workbook_load_progress(self, value: int, total: int, message: str) -> None:
-        if self.workbook_load_progress is None:
+        progress = self.workbook_load_progress
+        if progress is None:
             return
         if total <= 0:
-            self.workbook_load_progress.setRange(0, 0)
+            progress.setRange(0, 0)
         else:
-            self.workbook_load_progress.setRange(0, total)
-            self.workbook_load_progress.setValue(max(0, min(value, total)))
-        self.workbook_load_progress.setLabelText(message)
+            progress.setRange(0, total)
+            progress.setValue(max(0, min(value, total)))
+        progress.setLabelText(message)
 
     def finish_workbook_load(self, workbook: WorkbookData, workbook_id: str) -> None:
         self.close_workbook_load_progress()

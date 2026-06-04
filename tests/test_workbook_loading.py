@@ -45,6 +45,29 @@ class WorkbookLoadingTest(unittest.TestCase):
         finally:
             window.close()
 
+    def test_progress_update_survives_dialog_closing_during_signal(self):
+        window = SpreadsheetWindow()
+
+        class ClosingProgress:
+            def __init__(self):
+                self.label = ""
+
+            def setRange(self, _minimum, _maximum):
+                window.workbook_load_progress = None
+
+            def setLabelText(self, message):
+                self.label = message
+
+        progress = ClosingProgress()
+        try:
+            window.workbook_load_progress = progress
+
+            window.update_workbook_load_progress(0, 0, "Workbook ready")
+
+            self.assertEqual(progress.label, "Workbook ready")
+        finally:
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()
