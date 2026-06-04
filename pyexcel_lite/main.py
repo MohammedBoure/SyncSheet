@@ -13,12 +13,14 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFontComboBox,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QStatusBar,
@@ -417,6 +419,54 @@ class SpreadsheetWindow(QMainWindow):
             QStatusBar {
                 background: #f8fafc;
             }
+            QScrollArea#inspectorPanel {
+                background: #f6f8fa;
+                border: 0;
+                border-left: 1px solid #d0d7de;
+            }
+            QWidget#inspectorContent {
+                background: #f6f8fa;
+            }
+            QFrame#inspectorSection {
+                background: #ffffff;
+                border: 1px solid #d8dee4;
+                border-radius: 8px;
+            }
+            QLabel#inspectorSectionTitle {
+                color: #111827;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QLabel#inspectorValue {
+                background: #f8fafc;
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+                color: #374151;
+                padding: 7px;
+            }
+            QFrame#inspectorSection QComboBox,
+            QFrame#inspectorSection QLineEdit {
+                border: 1px solid #cfd7df;
+                border-radius: 6px;
+                padding: 6px 8px;
+                background: #ffffff;
+                color: #111827;
+            }
+            QToolButton#sidebarButton {
+                border: 1px solid #cfd7df;
+                border-radius: 6px;
+                background: #ffffff;
+                color: #1f2937;
+                padding: 6px 8px;
+            }
+            QToolButton#sidebarButton:hover {
+                background: #eef7f1;
+                border-color: #a8d5ba;
+            }
+            QToolButton#sidebarButton:pressed {
+                background: #dff3e8;
+                border-color: #107c41;
+            }
             """
         )
 
@@ -431,22 +481,91 @@ class SpreadsheetWindow(QMainWindow):
         button.toggled.connect(callback)
         return button
 
+    def _inspector_section(self, title: str, icon_name: str) -> tuple[QFrame, QVBoxLayout]:
+        frame = QFrame()
+        frame.setObjectName("inspectorSection")
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(12, 10, 12, 12)
+        outer.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(7)
+        icon = QLabel()
+        icon.setObjectName("inspectorSectionIcon")
+        icon.setPixmap(app_icon(icon_name, 20).pixmap(20, 20))
+        icon.setFixedSize(22, 22)
+        label = QLabel(title)
+        label.setObjectName("inspectorSectionTitle")
+        header.addWidget(icon)
+        header.addWidget(label)
+        header.addStretch(1)
+        outer.addLayout(header)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(7)
+        outer.addLayout(body)
+        return frame, body
+
+    def _sidebar_button(self, text: str, icon_name: str, callback) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("sidebarButton")
+        button.setText(text)
+        button.setIcon(app_icon(icon_name))
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button.setAutoRaise(False)
+        button.clicked.connect(callback)
+        return button
+
+    def _sidebar_action_button(self, action: QAction) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("sidebarButton")
+        button.setDefaultAction(action)
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button.setAutoRaise(False)
+        return button
+
     def _build_inspector(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setObjectName("inspectorPanel")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
         widget = QWidget()
+        widget.setObjectName("inspectorContent")
         layout = QVBoxLayout(widget)
-        layout.addWidget(QLabel("Selection"))
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        selection_section, selection_layout = self._inspector_section("Selection", "selection")
         self.selection_label = QLabel("No selection")
+        self.selection_label.setObjectName("inspectorValue")
         self.selection_label.setWordWrap(True)
-        layout.addWidget(self.selection_label)
-        layout.addWidget(QLabel("Quick stats"))
+        selection_layout.addWidget(self.selection_label)
+        layout.addWidget(selection_section)
+
+        stats_section, stats_layout = self._inspector_section("Quick Stats", "stats")
         self.stats_label = QLabel("Sum: 0\nAverage: 0\nCount: 0")
+        self.stats_label.setObjectName("inspectorValue")
         self.stats_label.setWordWrap(True)
-        layout.addWidget(self.stats_label)
-        layout.addWidget(QLabel("Network"))
+        stats_layout.addWidget(self.stats_label)
+        layout.addWidget(stats_section)
+
+        network_section, network_layout = self._inspector_section("Network", "network_host")
         self.network_status_label = QLabel("Offline")
+        self.network_status_label.setObjectName("inspectorValue")
         self.network_status_label.setWordWrap(True)
-        layout.addWidget(self.network_status_label)
-        layout.addWidget(QLabel("Formula Library"))
+        network_buttons = QHBoxLayout()
+        network_buttons.setContentsMargins(0, 0, 0, 0)
+        network_buttons.setSpacing(6)
+        for action in (self.host_network_action, self.join_network_action, self.leave_network_action):
+            network_buttons.addWidget(self._sidebar_action_button(action))
+        network_layout.addWidget(self.network_status_label)
+        network_layout.addLayout(network_buttons)
+        layout.addWidget(network_section)
+
+        formula_section, formula_layout = self._inspector_section("Formula Library", "formula")
         self.formula_category_box = QComboBox()
         self.formula_category_box.addItems(FORMULA_LIBRARY.keys())
         self.formula_category_box.currentTextChanged.connect(self.reload_formula_templates)
@@ -455,57 +574,74 @@ class SpreadsheetWindow(QMainWindow):
         self.formula_preview = QLineEdit()
         self.formula_preview.setReadOnly(True)
         formula_buttons = QHBoxLayout()
+        formula_buttons.setContentsMargins(0, 0, 0, 0)
+        formula_buttons.setSpacing(6)
         self.apply_template_button = QToolButton()
+        self.apply_template_button.setObjectName("sidebarButton")
         self.apply_template_button.setText("Apply")
         self.apply_template_button.setIcon(app_icon("formula"))
-        self.apply_template_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.apply_template_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.apply_template_button.clicked.connect(self.apply_formula_template)
         self.insert_template_button = QToolButton()
+        self.insert_template_button.setObjectName("sidebarButton")
         self.insert_template_button.setText("Insert")
         self.insert_template_button.setIcon(app_icon("formula"))
-        self.insert_template_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.insert_template_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.insert_template_button.clicked.connect(self.insert_formula_template)
         formula_buttons.addWidget(self.apply_template_button)
         formula_buttons.addWidget(self.insert_template_button)
+        for control in [self.formula_category_box, self.formula_template_box, self.formula_preview]:
+            formula_layout.addWidget(control)
+        formula_layout.addLayout(formula_buttons)
+        layout.addWidget(formula_section)
+
+        algorithm_section, algorithm_layout = self._inspector_section("Cell Algorithm", "formula")
         self.custom_algorithm_input = QLineEdit()
         self.custom_algorithm_input.setPlaceholderText("=A{row}*2")
         custom_buttons = QHBoxLayout()
+        custom_buttons.setContentsMargins(0, 0, 0, 0)
+        custom_buttons.setSpacing(6)
         self.apply_custom_button = QToolButton()
+        self.apply_custom_button.setObjectName("sidebarButton")
         self.apply_custom_button.setText("Apply")
         self.apply_custom_button.setIcon(app_icon("formula"))
-        self.apply_custom_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.apply_custom_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.apply_custom_button.clicked.connect(self.apply_custom_algorithm)
         self.fill_custom_button = QToolButton()
+        self.fill_custom_button.setObjectName("sidebarButton")
         self.fill_custom_button.setText("Fill")
         self.fill_custom_button.setIcon(app_icon("formula"))
-        self.fill_custom_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.fill_custom_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.fill_custom_button.clicked.connect(self.fill_selection_with_custom_algorithm)
         custom_buttons.addWidget(self.apply_custom_button)
         custom_buttons.addWidget(self.fill_custom_button)
-        for control in [self.formula_category_box, self.formula_template_box, self.formula_preview]:
-            layout.addWidget(control)
-        layout.addLayout(formula_buttons)
-        layout.addWidget(QLabel("Cell Algorithm"))
-        layout.addWidget(self.custom_algorithm_input)
-        layout.addLayout(custom_buttons)
+        algorithm_layout.addWidget(self.custom_algorithm_input)
+        algorithm_layout.addLayout(custom_buttons)
+        layout.addWidget(algorithm_section)
+
         self.reload_formula_templates()
-        layout.addWidget(QLabel("Charts"))
+
+        chart_section, chart_layout = self._inspector_section("Charts", "chart")
         self.chart_type_box = QComboBox()
         self.chart_type_box.addItems(["Bar", "Line", "Pie"])
         self.chart_title_input = QLineEdit()
         self.chart_title_input.setPlaceholderText("Chart title")
         self.create_chart_button = QToolButton()
+        self.create_chart_button.setObjectName("sidebarButton")
         self.create_chart_button.setText("Create")
         self.create_chart_button.setIcon(app_icon("chart"))
-        self.create_chart_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.create_chart_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.create_chart_button.clicked.connect(self.create_chart_from_selection)
         self.chart_widget = ChartWidget()
-        layout.addWidget(self.chart_type_box)
-        layout.addWidget(self.chart_title_input)
-        layout.addWidget(self.create_chart_button)
-        layout.addWidget(self.chart_widget)
+        chart_layout.addWidget(self.chart_type_box)
+        chart_layout.addWidget(self.chart_title_input)
+        chart_layout.addWidget(self.create_chart_button)
+        chart_layout.addWidget(self.chart_widget)
+        layout.addWidget(chart_section)
+
         layout.addStretch(1)
-        return widget
+        scroll.setWidget(widget)
+        return scroll
 
     def reload_formula_templates(self, _category: str | None = None) -> None:
         if not hasattr(self, "formula_template_box"):

@@ -4,7 +4,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QToolBar
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea, QToolBar, QToolButton
 
 from pyexcel_lite.main import SpreadsheetWindow
 
@@ -56,6 +56,26 @@ class RibbonIconTest(unittest.TestCase):
             self.assertGreaterEqual(len(icon_toolbars), 2)
             for toolbar in icon_toolbars:
                 self.assertEqual(toolbar.toolButtonStyle(), Qt.ToolButtonTextUnderIcon)
+        finally:
+            window.close()
+
+    def test_sidebar_uses_section_cards_and_icons(self):
+        window = SpreadsheetWindow()
+        try:
+            self.assertIsInstance(window.inspector, QScrollArea)
+            self.assertEqual(window.inspector.objectName(), "inspectorPanel")
+
+            sections = window.inspector.findChildren(QFrame, "inspectorSection")
+            titles = [label.text() for label in window.inspector.findChildren(QLabel, "inspectorSectionTitle")]
+            section_icons = window.inspector.findChildren(QLabel, "inspectorSectionIcon")
+            sidebar_buttons = window.inspector.findChildren(QToolButton, "sidebarButton")
+
+            self.assertGreaterEqual(len(sections), 6)
+            self.assertTrue({"Selection", "Quick Stats", "Network", "Formula Library", "Cell Algorithm", "Charts"}.issubset(set(titles)))
+            self.assertGreaterEqual(len(section_icons), 6)
+            self.assertTrue(all(label.pixmap() is not None and not label.pixmap().isNull() for label in section_icons))
+            self.assertGreaterEqual(len(sidebar_buttons), 8)
+            self.assertTrue(all(not button.icon().isNull() for button in sidebar_buttons))
         finally:
             window.close()
 
