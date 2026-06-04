@@ -15,6 +15,7 @@ class WorksheetTableModel(QAbstractTableModel):
         super().__init__()
         self.sheet = sheet
         self.evaluator = evaluator
+        self.zoom_factor = 1.0
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else self.sheet.row_count
@@ -47,6 +48,7 @@ class WorksheetTableModel(QAbstractTableModel):
             return False
         self.sheet.set_value(index.row(), index.column(), "" if value is None else str(value))
         self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
+        self.refresh_all()
         return True
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlags:
@@ -71,6 +73,11 @@ class WorksheetTableModel(QAbstractTableModel):
         for index in indexes:
             self.sheet.set_style(index.row(), index.column(), **changes)
         self.dataChanged.emit(self.index(top, left), self.index(bottom, right), [Qt.FontRole, Qt.ForegroundRole, Qt.BackgroundRole, Qt.TextAlignmentRole])
+
+    def set_zoom_factor(self, factor: float) -> None:
+        self.zoom_factor = factor
+        if self.rowCount() and self.columnCount():
+            self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1), [Qt.FontRole, Qt.DisplayRole])
 
     def insert_rows(self, start: int, count: int = 1) -> None:
         self.beginInsertRows(QModelIndex(), start, start + count - 1)
@@ -97,7 +104,7 @@ class WorksheetTableModel(QAbstractTableModel):
             self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1), [Qt.DisplayRole])
 
     def _font_from_style(self, style: CellStyle) -> QFont:
-        font = QFont(style.font_family, style.font_size)
+        font = QFont(style.font_family, max(1, round(style.font_size * self.zoom_factor)))
         font.setBold(style.bold)
         font.setItalic(style.italic)
         font.setUnderline(style.underline)

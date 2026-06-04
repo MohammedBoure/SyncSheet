@@ -54,6 +54,16 @@ class SpreadsheetView(QTableView):
         QShortcut(QKeySequence.Paste, self, self.paste_selection)
         QShortcut(QKeySequence.Delete, self, self.clear_selection)
 
+    def wheelEvent(self, event) -> None:
+        if event.modifiers() & Qt.ControlModifier:
+            if event.angleDelta().y() > 0:
+                self.window.zoom_in()
+            else:
+                self.window.zoom_out()
+            event.accept()
+            return
+        super().wheelEvent(event)
+
     def copy_selection(self) -> None:
         indexes = self.selectedIndexes()
         if not indexes:
@@ -104,6 +114,7 @@ class SpreadsheetWindow(QMainWindow):
         self.evaluator = FormulaEvaluator(self.workbook)
         self.models: list[WorksheetTableModel] = []
         self.current_path: Path | None = None
+        self.zoom_percent = 100
         self.setWindowTitle("PyExcel Lite")
         self.resize(1280, 760)
         self._build_actions()
@@ -136,6 +147,10 @@ class SpreadsheetWindow(QMainWindow):
         self.insert_column_action = QAction("Insert Column", self, triggered=self.insert_column)
         self.delete_column_action = QAction("Delete Column", self, triggered=self.delete_column)
         self.clear_action = QAction("Clear", self, shortcut=QKeySequence.Delete, triggered=self.clear_cells)
+        self.zoom_in_action = QAction("Zoom In", self, triggered=self.zoom_in)
+        self.zoom_in_action.setShortcuts([QKeySequence("Ctrl++"), QKeySequence("Ctrl+=")])
+        self.zoom_out_action = QAction("Zoom Out", self, shortcut=QKeySequence("Ctrl+-"), triggered=self.zoom_out)
+        self.zoom_reset_action = QAction("Reset Zoom", self, shortcut=QKeySequence("Ctrl+0"), triggered=self.reset_zoom)
         self.about_action = QAction("About", self, triggered=self.about)
 
     def _build_ui(self) -> None:
@@ -165,6 +180,8 @@ class SpreadsheetWindow(QMainWindow):
         sheet_menu.addActions([self.add_sheet_action, self.rename_sheet_action, self.delete_sheet_action])
         edit_menu = self.menuBar().addMenu("Edit")
         edit_menu.addActions([self.insert_row_action, self.delete_row_action, self.insert_column_action, self.delete_column_action, self.clear_action])
+        view_menu = self.menuBar().addMenu("View")
+        view_menu.addActions([self.zoom_in_action, self.zoom_out_action, self.zoom_reset_action])
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction(self.about_action)
 
@@ -174,6 +191,16 @@ class SpreadsheetWindow(QMainWindow):
         file_bar.addActions([self.new_action, self.open_action, self.save_action])
         file_bar.addSeparator()
         file_bar.addActions([self.add_sheet_action, self.export_csv_action])
+        file_bar.addSeparator()
+        file_bar.addActions([self.zoom_out_action, self.zoom_reset_action, self.zoom_in_action])
+        self.zoom_box = QSpinBox()
+        self.zoom_box.setRange(40, 220)
+        self.zoom_box.setSingleStep(10)
+        self.zoom_box.setSuffix("%")
+        self.zoom_box.setValue(self.zoom_percent)
+        self.zoom_box.valueChanged.connect(self.set_zoom_percent)
+        file_bar.addWidget(QLabel("Zoom"))
+        file_bar.addWidget(self.zoom_box)
 
         formula_bar = QToolBar("Formula")
         self.addToolBarBreak()
@@ -247,6 +274,7 @@ class SpreadsheetWindow(QMainWindow):
             model = WorksheetTableModel(sheet, self.evaluator)
             view = SpreadsheetView(self)
             view.setModel(model)
+            self.apply_zoom_to_view(view, model)
             view.selectionModel().selectionChanged.connect(self.on_selection_changed)
             self.models.append(model)
             self.tabs.addTab(view, sheet.name)
@@ -347,6 +375,36 @@ class SpreadsheetWindow(QMainWindow):
 
     def clear_cells(self) -> None:
         self.current_view.clear_selection()
+
+    def zoom_in(self) -> None:
+        self.set_zoom_percent(min(220, self.zoom_percent + 10))
+
+    def zoom_out(self) -> None:
+        self.set_zoom_percent(max(40, self.zoom_percent - 10))
+
+    def reset_zoom(self) -> None:
+        self.set_zoom_percent(100)
+
+    def set_zoom_percent(self, percent: int) -> None:
+        self.zoom_percent = max(40, min(220, int(percent)))
+        if hasattr(self, "zoom_box") and self.zoom_box.value() != self.zoom_percent:
+            self.zoom_box.blockSignals(True)
+            self.zoom_box.setValue(self.zoom_percent)
+            self.zoom_box.blockSignals(False)
+        if hasattr(self, "tabs"):
+            for index in range(self.tabs.count()):
+                view = self.tabs.widget(index)
+                model = view.model()
+                self.apply_zoom_to_view(view, model)
+        if self.statusBar():
+            self.statusBar().showMessage(f"Zoom {self.zoom_percent}%")
+
+    def apply_zoom_to_view(self, view: SpreadsheetView, model: WorksheetTableModel) -> None:
+        factor = self.zoom_percent / 100
+        model.set_zoom_factor(factor)
+        view.horizontalHeader().setDefaultSectionSize(max(45, round(95 * factor)))
+        view.verticalHeader().setDefaultSectionSize(max(18, round(26 * factor)))
+        view.setStyleSheet(f"QTableView {{ font-size: {max(7, round(10 * factor))}pt; }}")
 
     def commit_formula_bar(self) -> None:
         index = self.current_view.currentIndex()

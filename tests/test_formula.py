@@ -22,6 +22,13 @@ class FormulaEvaluatorTest(unittest.TestCase):
         self.sheet.set_value(0, 1, "=SUM(A1:A4)")
         self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 1), 10.0)
 
+    def test_sum_range_ignores_text_cells_like_excel(self):
+        self.sheet.set_value(0, 0, "10")
+        self.sheet.set_value(1, 0, "djoher")
+        self.sheet.set_value(2, 0, "5")
+        self.sheet.set_value(0, 1, "=SUM(A1:A3)")
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 1), 15.0)
+
     def test_average_and_count(self):
         self.sheet.set_value(0, 0, "3")
         self.sheet.set_value(1, 0, "9")
@@ -38,10 +45,48 @@ class FormulaEvaluatorTest(unittest.TestCase):
         self.sheet.set_value(0, 1, '=IF(1<2, UPPER(A1), "no")')
         self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 1), "MOHAMED")
 
+    def test_if_is_lazy_and_iferror_catches_math_errors(self):
+        self.sheet.set_value(0, 0, '=IF(FALSE, 1/0, "safe")')
+        self.sheet.set_value(0, 1, '=IFERROR(1/0, "fallback")')
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 0), "safe")
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 1), "fallback")
+
     def test_excel_style_equals_comparison(self):
         self.sheet.set_value(0, 0, "10")
         self.sheet.set_value(0, 1, '=IF(A1=10, "ok", "no")')
         self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 1), "ok")
+
+    def test_semicolon_argument_separator(self):
+        self.sheet.set_value(0, 0, "10")
+        self.sheet.set_value(0, 1, '=IF(A1=10; "ok"; "no")')
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 1), "ok")
+
+    def test_more_excel_math_and_text_operators(self):
+        self.sheet.set_value(0, 0, "10")
+        self.sheet.set_value(1, 0, "20")
+        self.sheet.set_value(2, 0, "30")
+        self.sheet.set_value(0, 1, "=PRODUCT(A1:A3)")
+        self.sheet.set_value(1, 1, "=MEDIAN(A1:A3)")
+        self.sheet.set_value(2, 1, '="Total: " & SUM(A1:A3)')
+        self.sheet.set_value(3, 1, "=50%*200")
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 1), 6000.0)
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 1, 1), 20)
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 2, 1), "Total: 60")
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 3, 1), 100.0)
+
+    def test_criteria_and_lookup_functions(self):
+        self.sheet.set_value(0, 0, "Ali")
+        self.sheet.set_value(0, 1, "100")
+        self.sheet.set_value(1, 0, "Sara")
+        self.sheet.set_value(1, 1, "250")
+        self.sheet.set_value(2, 0, "Ali")
+        self.sheet.set_value(2, 1, "50")
+        self.sheet.set_value(0, 2, '=SUMIF(A1:A3, "Ali", B1:B3)')
+        self.sheet.set_value(1, 2, '=COUNTIF(B1:B3, ">100")')
+        self.sheet.set_value(2, 2, '=VLOOKUP("Sara", A1:B3, 2, FALSE)')
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 2), 150.0)
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 1, 2), 1)
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 2, 2), 250)
 
     def test_cycle_detection(self):
         self.sheet.set_value(0, 0, "=B1")
