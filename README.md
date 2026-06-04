@@ -10,6 +10,7 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 - Right task pane with icon-led sections for selection, stats, project files, network collaboration, formulas, algorithms, and charts.
 - Organized UI theme rules in `pyexcel_lite/theme.py` so interface styling is separated from spreadsheet logic.
 - Project workspace support for opening a whole folder tree as one project, including nested folders and multiple workbook or CSV files.
+- The last opened project is remembered and reopened automatically on the next launch.
 - Large-table performance improvements with batched paste/clear operations, partial redraws, and cached formula results.
 - Undo and redo for cell edits, paste operations, clears, and generated formulas.
 - Bar, line, and pie charts from the selected cells, with full-screen dialog viewing.
@@ -81,6 +82,7 @@ The standalone server keeps the shared workbook in `shared_workbook_state.json` 
 ## Project Workspaces
 
 Use `Project > Open Project` to choose a parent folder. The program scans nested folders as one workspace and shows the project tree in the right Project task pane.
+The last opened project folder is saved in `pyexcel_lite_settings.json`; if it still exists, PyExcel Lite reopens it automatically the next time the program starts.
 XLSX and CSV files can be opened directly from the project tree; opening a project spreadsheet sends a full workbook snapshot to connected teammates.
 
 Use `Project > Share Project` while connected to a host or shared server to synchronize the project structure with the team.

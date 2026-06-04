@@ -2,10 +2,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PySide6.QtWidgets import QApplication
+
+from pyexcel_lite.main import SpreadsheetWindow
 from pyexcel_lite.project import project_from_payload, project_to_payload, scan_project_folder
+from pyexcel_lite.settings import StartupSettings
 
 
 class ProjectDataTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
     def test_scan_project_folder_keeps_nested_structure_and_openable_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Client Work"
@@ -36,6 +44,22 @@ class ProjectDataTest(unittest.TestCase):
             self.assertTrue(restored.remote)
             self.assertEqual(restored.name, "Team")
             self.assertEqual(restored.file_by_relative_path("sheet.csv").kind, "csv")
+
+    def test_window_reopens_last_project_from_startup_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Last Project"
+            root.mkdir()
+            (root / "sheet.csv").write_text("x\n1\n", encoding="utf-8")
+            window = SpreadsheetWindow()
+            try:
+                window.startup_settings = StartupSettings(last_project_path=str(root))
+                window.apply_last_project_settings()
+
+                self.assertEqual(window.project.name, "Last Project")
+                self.assertEqual(window.startup_settings.last_project_path, str(root))
+                self.assertIsNotNone(window.project.file_by_relative_path("sheet.csv"))
+            finally:
+                window.close()
 
 
 if __name__ == "__main__":

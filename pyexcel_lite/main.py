@@ -68,8 +68,10 @@ from .project import (
 from .qt_model import WorksheetTableModel
 from .settings import (
     StartupSettings,
+    forget_last_project,
     load_startup_settings,
     local_server_startup,
+    remember_last_project,
     save_startup_settings,
     shared_client_startup,
     without_startup_mode,
@@ -258,6 +260,7 @@ class SpreadsheetWindow(QMainWindow):
         self._build_actions()
         self._build_ui()
         self.load_workbook(self.workbook)
+        self.apply_last_project_settings()
         self.apply_startup_settings()
 
     @property
@@ -848,15 +851,21 @@ class SpreadsheetWindow(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Open project folder")
         if not path:
             return
-        self.load_project(Path(path))
-        self.send_project_snapshot()
+        if self.load_project(Path(path)):
+            self.send_project_snapshot()
 
-    def load_project(self, path: Path) -> None:
+    def load_project(self, path: Path) -> bool:
+        return self.load_project_path(path, remember=True, notify_errors=True)
+
+    def load_project_path(self, path: Path, *, remember: bool, notify_errors: bool) -> bool:
         try:
             project = scan_project_folder(path)
         except OSError as exc:
-            QMessageBox.critical(self, "Open project failed", str(exc))
-            return
+            if notify_errors:
+                QMessageBox.critical(self, "Open project failed", str(exc))
+            elif self.statusBar():
+                self.statusBar().showMessage(f"Last project unavailable: {path}")
+            return False
         previous_workbooks = self.project_workbooks if self.project.remote and self.project.name == project.name else {}
         self.project = project
         self.project_workbooks = {
@@ -867,19 +876,45 @@ class SpreadsheetWindow(QMainWindow):
         self.active_workbook_id = self.workbook_id_for_path(self.current_path)
         self.cache_active_workbook()
         self.update_project_panel()
+        if remember:
+            self.remember_last_project_path(Path(self.project.root_path or path))
         self.statusBar().showMessage(f"Project opened: {self.project.name}")
+        return True
+
+    def apply_last_project_settings(self) -> None:
+        last_project_path = self.startup_settings.normalized().last_project_path
+        if not last_project_path:
+            return
+        path = Path(last_project_path)
+        if not path.exists() or not path.is_dir():
+            self.forget_last_project_path()
+            if self.statusBar():
+                self.statusBar().showMessage(f"Last project not found: {last_project_path}")
+            return
+        self.load_project_path(path, remember=False, notify_errors=False)
+
+    def remember_last_project_path(self, path: Path) -> None:
+        self.startup_settings = remember_last_project(self.startup_settings, path)
+        save_startup_settings(self.startup_settings)
+
+    def forget_last_project_path(self) -> None:
+        previous = self.startup_settings.normalized()
+        self.startup_settings = forget_last_project(previous)
+        if self.startup_settings != previous:
+            save_startup_settings(self.startup_settings)
 
     def refresh_project(self) -> None:
         if not self.project.root_path or self.project.remote:
             self.statusBar().showMessage("No local project folder to refresh")
             return
-        self.load_project(Path(self.project.root_path))
-        self.send_project_snapshot()
+        if self.load_project(Path(self.project.root_path)):
+            self.send_project_snapshot()
 
     def close_project(self) -> None:
         self.project = ProjectData()
         self.project_workbooks.clear()
         self.active_workbook_id = ""
+        self.forget_last_project_path()
         self.update_project_panel()
         self.send_project_snapshot()
         self.statusBar().showMessage("Project closed")

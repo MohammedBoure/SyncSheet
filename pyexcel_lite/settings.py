@@ -18,6 +18,7 @@ class StartupSettings:
     shared_server_host: str = "127.0.0.1"
     shared_server_port: int = DEFAULT_PORT
     local_server_port: int = DEFAULT_PORT
+    last_project_path: str = ""
 
     def normalized(self) -> "StartupSettings":
         mode = self.startup_mode if self.startup_mode in STARTUP_MODES else "manual"
@@ -26,6 +27,7 @@ class StartupSettings:
             shared_server_host=self.shared_server_host.strip() or "127.0.0.1",
             shared_server_port=valid_port(self.shared_server_port),
             local_server_port=valid_port(self.local_server_port),
+            last_project_path=str(self.last_project_path or "").strip(),
         )
 
 
@@ -36,6 +38,7 @@ def shared_client_startup(settings: StartupSettings, host: str, port: int) -> St
         shared_server_host=host,
         shared_server_port=port,
         local_server_port=current.local_server_port,
+        last_project_path=current.last_project_path,
     ).normalized()
 
 
@@ -46,6 +49,7 @@ def local_server_startup(settings: StartupSettings, port: int) -> StartupSetting
         shared_server_host=current.shared_server_host,
         shared_server_port=current.shared_server_port,
         local_server_port=port,
+        last_project_path=current.last_project_path,
     ).normalized()
 
 
@@ -58,6 +62,29 @@ def without_startup_mode(settings: StartupSettings, mode: str) -> StartupSetting
         shared_server_host=current.shared_server_host,
         shared_server_port=current.shared_server_port,
         local_server_port=current.local_server_port,
+        last_project_path=current.last_project_path,
+    ).normalized()
+
+
+def remember_last_project(settings: StartupSettings, path: str | Path) -> StartupSettings:
+    current = settings.normalized()
+    return StartupSettings(
+        startup_mode=current.startup_mode,
+        shared_server_host=current.shared_server_host,
+        shared_server_port=current.shared_server_port,
+        local_server_port=current.local_server_port,
+        last_project_path=str(path or "").strip(),
+    ).normalized()
+
+
+def forget_last_project(settings: StartupSettings) -> StartupSettings:
+    current = settings.normalized()
+    return StartupSettings(
+        startup_mode=current.startup_mode,
+        shared_server_host=current.shared_server_host,
+        shared_server_port=current.shared_server_port,
+        local_server_port=current.local_server_port,
+        last_project_path="",
     ).normalized()
 
 
@@ -81,6 +108,7 @@ def load_startup_settings(path: Path = SETTINGS_PATH) -> StartupSettings:
         shared_server_host=str(payload.get("shared_server_host", "127.0.0.1")),
         shared_server_port=valid_port(payload.get("shared_server_port", DEFAULT_PORT)),
         local_server_port=valid_port(payload.get("local_server_port", DEFAULT_PORT)),
+        last_project_path=str(payload.get("last_project_path", "")),
     ).normalized()
 
 
