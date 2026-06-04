@@ -167,6 +167,25 @@ def _draw_icon(p: QPainter, name: str, size: int) -> None:
         p.drawRoundedRect(QRectF(7, 8, 15, 10), 3, 3)
         p.setPen(_pen(RED, 2))
         p.drawLine(QPointF(9, 20), QPointF(22, 7))
+    elif name == "copy":
+        _document(p, QRectF(8, 7, 13, 16))
+        _document(p, QRectF(5, 4, 13, 16))
+    elif name == "cut":
+        p.setPen(_pen(INK, 1.8))
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(QRectF(5, 5, 6, 6))
+        p.drawEllipse(QRectF(5, 17, 6, 6))
+        p.drawLine(QPointF(10, 10), QPointF(23, 22))
+        p.drawLine(QPointF(10, 18), QPointF(23, 6))
+    elif name == "paste":
+        p.setPen(_pen(GREEN, 1.6))
+        p.setBrush(QColor(GREEN_LIGHT))
+        p.drawRoundedRect(QRectF(8, 4, 12, 5), 2, 2)
+        p.setBrush(QColor("#ffffff"))
+        p.drawRoundedRect(QRectF(5, 8, 18, 16), 3, 3)
+        p.setPen(_pen("#9ca3af", 1))
+        p.drawLine(QPointF(9, 14), QPointF(19, 14))
+        p.drawLine(QPointF(9, 18), QPointF(16, 18))
     elif name in {"undo", "redo"}:
         p.setPen(_pen(GREEN, 2.2))
         if name == "undo":

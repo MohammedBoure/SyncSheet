@@ -16,6 +16,7 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 - Standalone shared-workbook and project server for LAN client/server use, with JSON state persistence.
 - TCP socket sync for workbook snapshots, cell edits, paste/clear batches, sheet add/rename/delete, and row/column insert/delete operations.
 - Formula bar with live display and raw formula editing.
+- Right-click context menu for selected cells with copy, cut, paste, clear, row/column, formula, and chart operations.
 - Formula library for applying arithmetic, statistical, logical, lookup, and custom cell algorithms to the active cell or selected range.
 - Basic formulas: `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, `IF`, `ROUND`, `ABS`, `SQRT`, `POWER`, `CONCAT`, `LEN`, `LEFT`, `RIGHT`, `UPPER`, `LOWER`, `AND`, `OR`, `NOT`, `TODAY`, and `NOW`.
 - Expanded Excel-like formulas: criteria functions such as `SUMIF`, lookup functions such as `VLOOKUP`, statistics, trigonometry, date functions, text functions, `IFERROR`, percentage expressions such as `50%`, and `&` text concatenation.

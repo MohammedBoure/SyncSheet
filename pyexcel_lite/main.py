@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path, PurePosixPath
 
-from PySide6.QtCore import QItemSelection, QModelIndex, Qt
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, QModelIndex, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QScrollArea,
     QSpinBox,
@@ -165,6 +166,59 @@ class SpreadsheetView(QTableView):
         if not indexes:
             return
         self.model().clear_indexes(indexes, refresh_dependents=True)
+
+    def contextMenuEvent(self, event) -> None:
+        self.prepare_context_selection(self.indexAt(event.pos()))
+        menu = self.build_context_menu()
+        menu.exec(event.globalPos())
+
+    def prepare_context_selection(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        selection_model = self.selectionModel()
+        if selection_model is None:
+            return
+        if not selection_model.isSelected(index):
+            selection_model.select(index, QItemSelectionModel.ClearAndSelect)
+        selection_model.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
+
+    def build_context_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.setObjectName("cellContextMenu")
+        has_selection = bool(self.selectedIndexes())
+        has_clipboard_text = bool(QApplication.clipboard().text())
+
+        self._add_context_action(menu, "Copy", "copy", self.copy_selection, has_selection)
+        self._add_context_action(menu, "Cut", "cut", self.cut_selection, has_selection)
+        self._add_context_action(menu, "Paste", "paste", self.paste_selection, has_clipboard_text)
+        self._add_context_action(menu, "Clear Selection", "clear", self.clear_selection, has_selection)
+
+        menu.addSeparator()
+        self._add_context_action(menu, "Insert Row", "row_insert", self.window.insert_row)
+        self._add_context_action(menu, "Delete Row", "row_delete", self.window.delete_row)
+        self._add_context_action(menu, "Insert Column", "column_insert", self.window.insert_column)
+        self._add_context_action(menu, "Delete Column", "column_delete", self.window.delete_column)
+
+        menu.addSeparator()
+        formulas = QMenu("Formulas", menu)
+        formulas.setObjectName("cellContextFormulasMenu")
+        formulas.setIcon(app_icon("formula"))
+        menu.addMenu(formulas)
+        menu._pyexcel_submenus = [formulas]
+        self._add_context_action(formulas, "Apply Selected Template", "formula", self.window.apply_formula_template, has_selection)
+        self._add_context_action(formulas, "Insert Template In Formula Bar", "formula", self.window.insert_formula_template)
+        self._add_context_action(formulas, "Fill Selection With Algorithm", "formula", self.window.fill_selection_with_custom_algorithm, has_selection)
+
+        menu.addSeparator()
+        self._add_context_action(menu, "Create Chart From Selection", "chart", self.window.create_chart_from_selection, has_selection)
+        self._add_context_action(menu, "Refresh Formulas", "refresh", self.window.refresh_workbook_formulas)
+        return menu
+
+    def _add_context_action(self, menu: QMenu, text: str, icon_name: str, callback, enabled: bool = True):
+        action = menu.addAction(app_icon(icon_name), text)
+        action.setEnabled(enabled)
+        action.triggered.connect(callback)
+        return action
 
 
 class SpreadsheetWindow(QMainWindow):
@@ -639,6 +693,29 @@ class SpreadsheetWindow(QMainWindow):
             QMenuBar {
                 background: #ffffff;
                 border-bottom: 1px solid #e5e7eb;
+            }
+            QMenu#cellContextMenu,
+            QMenu#cellContextFormulasMenu {
+                background: #ffffff;
+                border: 1px solid #d0d7de;
+                padding: 5px;
+                color: #1f2937;
+            }
+            QMenu#cellContextMenu::item,
+            QMenu#cellContextFormulasMenu::item {
+                padding: 7px 30px 7px 24px;
+                border-radius: 5px;
+            }
+            QMenu#cellContextMenu::item:selected,
+            QMenu#cellContextFormulasMenu::item:selected {
+                background: #dff3e8;
+                color: #0b5f32;
+            }
+            QMenu#cellContextMenu::separator,
+            QMenu#cellContextFormulasMenu::separator {
+                height: 1px;
+                background: #e5e7eb;
+                margin: 5px 4px;
             }
             QStatusBar {
                 background: #f8fafc;
