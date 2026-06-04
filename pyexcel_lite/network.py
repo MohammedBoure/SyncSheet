@@ -17,6 +17,35 @@ PROTOCOL_VERSION = 1
 STYLE_FIELDS = set(CellStyle.__dataclass_fields__)
 
 
+def local_ipv4_addresses() -> list[str]:
+    addresses: list[str] = []
+
+    def add_address(address: str) -> None:
+        if address and address != "0.0.0.0" and not address.startswith("127.") and address not in addresses:
+            addresses.append(address)
+
+    try:
+        for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            add_address(item[4][0])
+    except OSError:
+        pass
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.168.1.1", 1))
+        add_address(probe.getsockname()[0])
+    except OSError:
+        pass
+    finally:
+        probe.close()
+
+    return addresses or ["127.0.0.1"]
+
+
+def local_join_addresses(port: int = DEFAULT_PORT) -> list[str]:
+    return [f"{address}:{port}" for address in local_ipv4_addresses()]
+
+
 def workbook_to_payload(workbook: WorkbookData) -> dict:
     return {
         "version": PROTOCOL_VERSION,
@@ -184,7 +213,7 @@ class CollaborationServer(CollaborationEndpoint):
         self._running = True
         self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
         self._accept_thread.start()
-        self.status_changed.emit(f"Hosting on {self.host}:{self.port}")
+        self.status_changed.emit(f"Server ready. Clients join: {', '.join(local_join_addresses(self.port))}")
 
     def send(self, message: dict) -> None:
         self._broadcast(message)

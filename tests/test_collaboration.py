@@ -7,7 +7,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from pyexcel_lite.main import SpreadsheetWindow
-from pyexcel_lite.network import CollaborationEndpoint, cell_update_message, workbook_from_payload, workbook_to_payload
+from pyexcel_lite.network import (
+    CollaborationEndpoint,
+    cell_update_message,
+    local_join_addresses,
+    workbook_from_payload,
+    workbook_to_payload,
+)
 from pyexcel_lite.workbook import WorkbookData
 
 
@@ -86,6 +92,13 @@ class CollaborationTest(unittest.TestCase):
             self.assertEqual(window.workbook.sheet_names(), ["Sheet1"])
         finally:
             window.close()
+
+    def test_local_join_addresses_include_port_for_clients(self):
+        addresses = local_join_addresses(9012)
+
+        self.assertTrue(addresses)
+        self.assertTrue(all(address.endswith(":9012") for address in addresses))
+        self.assertNotIn("0.0.0.0:9012", addresses)
 
 
 if __name__ == "__main__":

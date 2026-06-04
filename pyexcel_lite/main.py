@@ -41,6 +41,7 @@ from .network import (
     CollaborationEndpoint,
     CollaborationServer,
     cell_update_message,
+    local_join_addresses,
     sheet_message,
     structure_message,
     workbook_from_payload,
@@ -728,7 +729,7 @@ class SpreadsheetWindow(QMainWindow):
     def join_collaboration(self) -> None:
         if self.collaboration is not None:
             self.leave_collaboration()
-        target, ok = QInputDialog.getText(self, "Join collaboration", "Host:port", text=f"127.0.0.1:{DEFAULT_PORT}")
+        target, ok = QInputDialog.getText(self, "Join collaboration", "Server IP:port", text=f"127.0.0.1:{DEFAULT_PORT}")
         if not ok or not target.strip():
             return
         try:
@@ -796,9 +797,10 @@ class SpreadsheetWindow(QMainWindow):
         self.collaboration_status = status
         if hasattr(self, "network_status_label"):
             if self.collaboration_role == "Host":
-                text = f"Host: {status}\nClients: {self.collaboration_clients}"
+                addresses = ", ".join(local_join_addresses(self.collaboration.port)) if isinstance(self.collaboration, CollaborationServer) else ""
+                text = f"Server\n{status}\nAddress: {addresses}\nClients: {self.collaboration_clients}"
             elif self.collaboration_role == "Client":
-                text = f"Client: {status}"
+                text = f"Client\n{status}"
             else:
                 text = "Offline"
             self.network_status_label.setText(text)

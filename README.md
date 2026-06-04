@@ -45,8 +45,9 @@ D:\git\GoldShop\venv\Scripts\python.exe run_excel.py
 
 ## Realtime Collaboration
 
-On the first computer, choose `Network > Host` and keep the selected port, usually `8765`.
-On another computer on the same LAN, choose `Network > Join` and enter `host-ip:8765`, for example `192.168.1.20:8765`.
+On the server computer, choose `Network > Host` and keep the selected port, usually `8765`.
+The Network panel shows the local address clients should use, for example `192.168.1.20:8765`.
+On each client computer on the same LAN, choose `Network > Join` and enter that server address.
 
 The host sends the current workbook as a snapshot when a user joins, then all users receive live updates for cell edits, pasted ranges, sheet changes, and row or column structure changes.
 
