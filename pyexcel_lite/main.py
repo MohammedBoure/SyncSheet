@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path, PurePosixPath
 
-from PySide6.QtCore import QItemSelection, QItemSelectionModel, QModelIndex, Qt
+from PySide6.QtCore import QObject, QItemSelection, QItemSelectionModel, QModelIndex, QThread, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QScrollArea,
     QSplitter,
     QSpinBox,
@@ -245,6 +246,32 @@ class SpreadsheetView(QTableView):
         return action
 
 
+class WorkbookLoadWorker(QObject):
+    progress = Signal(int, int, str)
+    finished = Signal(object, str)
+    failed = Signal(str)
+
+    def __init__(self, path: Path, workbook_id: str = ""):
+        super().__init__()
+        self.path = path
+        self.workbook_id = workbook_id
+
+    def run(self) -> None:
+        try:
+            workbook = self._load_workbook()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(workbook, self.workbook_id)
+
+    def _load_workbook(self) -> WorkbookData:
+        extension = self.path.suffix.lower()
+        progress = lambda value, total, message: self.progress.emit(value, total, message)
+        if extension == ".csv":
+            return load_csv(self.path, progress_callback=progress)
+        return load_xlsx(self.path, progress_callback=progress)
+
+
 class SpreadsheetWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -265,6 +292,10 @@ class SpreadsheetWindow(QMainWindow):
         self.applying_remote_update = False
         self.chart_dialog: QDialog | None = None
         self.chart_dialog_widget: ChartWidget | None = None
+        self.workbook_load_thread: QThread | None = None
+        self.workbook_load_worker: WorkbookLoadWorker | None = None
+        self.workbook_load_progress: QProgressDialog | None = None
+        self.workbook_load_context: dict[str, object] = {}
         self.startup_settings = load_startup_settings()
         self.setWindowTitle("PyExcel Lite")
         self.resize(1280, 760)
@@ -1014,14 +1045,15 @@ class SpreadsheetWindow(QMainWindow):
             return
         path = self.project.absolute_path_for(project_file)
         if path is not None:
-            try:
-                workbook = load_xlsx(path) if project_file.extension == ".xlsx" else load_csv(path)
-                self.load_workbook(workbook, workbook_id=workbook_id)
-                self.pending_project_open_id = ""
-                self.send_collaboration_snapshot()
-                self.statusBar().showMessage(f"Opened project file: {project_file.relative_path}")
-            except Exception as exc:
-                QMessageBox.critical(self, "Open project file failed", str(exc))
+            self.start_workbook_load(
+                path,
+                workbook_id=workbook_id,
+                title="Open project file",
+                success_message=f"Opened project file: {project_file.relative_path}",
+                error_title="Open project file failed",
+                send_snapshot=True,
+                clear_pending_project=True,
+            )
             return
         if self.collaboration is not None and self.collaboration.running:
             self.pending_project_open_id = workbook_id
@@ -1997,6 +2029,88 @@ class SpreadsheetWindow(QMainWindow):
         self.update_window_title()
         self.update_undo_redo_actions()
 
+    def start_workbook_load(
+        self,
+        path: Path,
+        *,
+        workbook_id: str = "",
+        title: str = "Open workbook",
+        success_message: str | None = None,
+        error_title: str = "Open failed",
+        send_snapshot: bool = True,
+        clear_pending_project: bool = False,
+    ) -> None:
+        if self.workbook_load_thread is not None:
+            self.statusBar().showMessage("A workbook is already opening")
+            return
+        self.workbook_load_context = {
+            "success_message": success_message or f"Opened {path}",
+            "error_title": error_title,
+            "send_snapshot": send_snapshot,
+            "clear_pending_project": clear_pending_project,
+        }
+        self.workbook_load_progress = QProgressDialog(f"Opening {path.name}", "", 0, 0, self)
+        self.workbook_load_progress.setWindowTitle(title)
+        self.workbook_load_progress.setCancelButton(None)
+        self.workbook_load_progress.setWindowModality(Qt.WindowModal)
+        self.workbook_load_progress.setMinimumDuration(0)
+        self.workbook_load_progress.setAutoClose(False)
+        self.workbook_load_progress.setAutoReset(False)
+        self.workbook_load_progress.show()
+        self.statusBar().showMessage(f"Opening {path}")
+
+        thread = QThread(self)
+        worker = WorkbookLoadWorker(path, workbook_id)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self.update_workbook_load_progress)
+        worker.finished.connect(self.finish_workbook_load)
+        worker.failed.connect(self.fail_workbook_load)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self.clear_workbook_load_state)
+        self.workbook_load_thread = thread
+        self.workbook_load_worker = worker
+        thread.start()
+
+    def update_workbook_load_progress(self, value: int, total: int, message: str) -> None:
+        if self.workbook_load_progress is None:
+            return
+        if total <= 0:
+            self.workbook_load_progress.setRange(0, 0)
+        else:
+            self.workbook_load_progress.setRange(0, total)
+            self.workbook_load_progress.setValue(max(0, min(value, total)))
+        self.workbook_load_progress.setLabelText(message)
+
+    def finish_workbook_load(self, workbook: WorkbookData, workbook_id: str) -> None:
+        self.close_workbook_load_progress()
+        self.load_workbook(workbook, workbook_id=workbook_id or None)
+        if self.workbook_load_context.get("clear_pending_project"):
+            self.pending_project_open_id = ""
+        if self.workbook_load_context.get("send_snapshot", True):
+            self.send_collaboration_snapshot()
+        message = str(self.workbook_load_context.get("success_message") or f"Opened {workbook.path or 'workbook'}")
+        self.statusBar().showMessage(message)
+
+    def fail_workbook_load(self, error: str) -> None:
+        self.close_workbook_load_progress()
+        title = str(self.workbook_load_context.get("error_title") or "Open failed")
+        QMessageBox.critical(self, title, error)
+        self.statusBar().showMessage(title)
+
+    def close_workbook_load_progress(self) -> None:
+        if self.workbook_load_progress is not None:
+            self.workbook_load_progress.close()
+            self.workbook_load_progress = None
+
+    def clear_workbook_load_state(self) -> None:
+        self.workbook_load_thread = None
+        self.workbook_load_worker = None
+        self.workbook_load_context = {}
+
     def new_file(self) -> None:
         self.load_workbook(WorkbookData(), workbook_id="")
         self.send_collaboration_snapshot()
@@ -2006,12 +2120,7 @@ class SpreadsheetWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Open workbook", "", "Excel workbooks (*.xlsx)")
         if not path:
             return
-        try:
-            self.load_workbook(load_xlsx(path))
-            self.send_collaboration_snapshot()
-            self.statusBar().showMessage(f"Opened {path}")
-        except Exception as exc:
-            QMessageBox.critical(self, "Open failed", str(exc))
+        self.start_workbook_load(Path(path), title="Open workbook", success_message=f"Opened {path}")
 
     def save_file(self) -> None:
         if self.current_path is None:
@@ -2285,6 +2394,10 @@ class SpreadsheetWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:
+        if self.workbook_load_thread is not None and self.workbook_load_thread.isRunning():
+            event.ignore()
+            self.statusBar().showMessage("Please wait until the workbook finishes opening")
+            return
         if self.collaboration is not None:
             self.collaboration.stop()
         super().closeEvent(event)

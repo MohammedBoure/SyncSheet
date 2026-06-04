@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -12,6 +12,8 @@ from openpyxl.utils import column_index_from_string
 
 from .cell_address import index_to_column_name
 from .workbook import CellData, CellStyle, WorkbookData, WorksheetData
+
+ProgressCallback = Callable[[int, int, str], None]
 
 
 def save_xlsx(workbook_data: WorkbookData, path: str | Path) -> None:
@@ -33,17 +35,24 @@ def save_xlsx(workbook_data: WorkbookData, path: str | Path) -> None:
     workbook_data.path = str(target)
 
 
-def load_xlsx(path: str | Path) -> WorkbookData:
+def load_xlsx(path: str | Path, progress_callback: ProgressCallback | None = None) -> WorkbookData:
     source = Path(path)
+    if progress_callback:
+        progress_callback(0, 0, f"Reading {source.name}")
     book = load_workbook(source, data_only=False)
     sheets: list[WorksheetData] = []
+    total_rows = max(1, sum(max(1, sheet.max_row or 1) for sheet in book.worksheets))
+    loaded_rows = 0
     for openpyxl_sheet in book.worksheets:
+        sheet_rows = max(1, openpyxl_sheet.max_row or 1)
+        if progress_callback:
+            progress_callback(loaded_rows, total_rows, f"Loading {openpyxl_sheet.title}")
         sheet_data = WorksheetData(
             name=openpyxl_sheet.title,
             row_count=max(200, openpyxl_sheet.max_row or 1),
             column_count=max(52, openpyxl_sheet.max_column or 1),
         )
-        for row in openpyxl_sheet.iter_rows():
+        for row_number, row in enumerate(openpyxl_sheet.iter_rows(), start=1):
             for excel_cell in row:
                 if excel_cell.value is None and not excel_cell.has_style:
                     continue
@@ -53,6 +62,13 @@ def load_xlsx(path: str | Path) -> WorkbookData:
                 value = "" if excel_cell.value is None else excel_cell.value
                 sheet_data.cells[(row_index, column_index)] = CellData(value=value, style=style)
                 sheet_data.track_formula_cell(row_index, column_index, value)
+            loaded_rows += 1
+            if progress_callback and (row_number == sheet_rows or row_number % 25 == 0):
+                progress_callback(
+                    min(loaded_rows, total_rows),
+                    total_rows,
+                    f"Loading {openpyxl_sheet.title} row {row_number}/{sheet_rows}",
+                )
         for key, dimension in openpyxl_sheet.column_dimensions.items():
             if dimension.width:
                 sheet_data.column_widths[column_index_from_string(key) - 1] = int(dimension.width)
@@ -62,11 +78,15 @@ def load_xlsx(path: str | Path) -> WorkbookData:
         sheets.append(sheet_data)
     workbook_data = WorkbookData(sheets=sheets or [WorksheetData(name="Sheet1")], active_sheet_index=book.index(book.active))
     workbook_data.path = str(source)
+    if progress_callback:
+        progress_callback(total_rows, total_rows, "Workbook ready")
     return workbook_data
 
 
-def load_csv(path: str | Path) -> WorkbookData:
+def load_csv(path: str | Path, progress_callback: ProgressCallback | None = None) -> WorkbookData:
     source = Path(path)
+    if progress_callback:
+        progress_callback(0, 0, f"Reading {source.name}")
     sheet_data = WorksheetData(name=source.stem or "CSV")
     with source.open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.reader(handle)
@@ -75,8 +95,12 @@ def load_csv(path: str | Path) -> WorkbookData:
                 if value == "":
                     continue
                 sheet_data.set_value(row_index, column_index, value, touch=False)
+            if progress_callback and row_index % 200 == 0:
+                progress_callback(0, 0, f"Loading row {row_index + 1}")
     workbook_data = WorkbookData(sheets=[sheet_data])
     workbook_data.path = str(source)
+    if progress_callback:
+        progress_callback(1, 1, "Workbook ready")
     return workbook_data
 
 
