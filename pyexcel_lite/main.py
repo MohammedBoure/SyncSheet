@@ -55,6 +55,7 @@ from .network import (
     normalize_workbook_id,
     sheet_message,
     structure_message,
+    workbook_request_message,
     workbook_from_payload,
     workbook_to_payload,
 )
@@ -243,6 +244,7 @@ class SpreadsheetWindow(QMainWindow):
         self.project = ProjectData()
         self.project_workbooks: dict[str, WorkbookData] = {}
         self.active_workbook_id = ""
+        self.pending_project_open_id = ""
         self.models: list[WorksheetTableModel] = []
         self.current_path: Path | None = None
         self.zoom_percent = 100
@@ -914,6 +916,7 @@ class SpreadsheetWindow(QMainWindow):
         self.project = ProjectData()
         self.project_workbooks.clear()
         self.active_workbook_id = ""
+        self.pending_project_open_id = ""
         self.forget_last_project_path()
         self.update_project_panel()
         self.send_project_snapshot()
@@ -997,33 +1000,47 @@ class SpreadsheetWindow(QMainWindow):
         workbook_id = normalize_workbook_id(project_file.relative_path)
         if workbook_id in self.project_workbooks:
             self.load_workbook(self.project_workbooks[workbook_id], workbook_id=workbook_id)
+            self.pending_project_open_id = ""
             self.statusBar().showMessage(f"Opened synchronized project file: {project_file.relative_path}")
             return
         path = self.project.absolute_path_for(project_file)
-        if path is None:
-            QMessageBox.information(
-                self,
-                "Project file",
-                "This project file is known from the team server, but no synchronized workbook data has arrived yet.",
-            )
+        if path is not None:
+            try:
+                workbook = load_xlsx(path) if project_file.extension == ".xlsx" else load_csv(path)
+                self.load_workbook(workbook, workbook_id=workbook_id)
+                self.pending_project_open_id = ""
+                self.send_collaboration_snapshot()
+                self.statusBar().showMessage(f"Opened project file: {project_file.relative_path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Open project file failed", str(exc))
             return
-        try:
-            workbook = load_xlsx(path) if project_file.extension == ".xlsx" else load_csv(path)
-            self.load_workbook(workbook, workbook_id=workbook_id)
-            self.send_collaboration_snapshot()
-            self.statusBar().showMessage(f"Opened project file: {project_file.relative_path}")
-        except Exception as exc:
-            QMessageBox.critical(self, "Open project file failed", str(exc))
+        if self.collaboration is not None and self.collaboration.running:
+            self.pending_project_open_id = workbook_id
+            self.send_collaboration_message(workbook_request_message(workbook_id))
+            self.statusBar().showMessage(f"Requested project file: {project_file.relative_path}")
+            return
+        QMessageBox.information(
+            self,
+            "Project file",
+            "This file is not available locally yet. Connect to the host or shared server to request it.",
+        )
 
     def update_project_actions(self) -> None:
         if not hasattr(self, "open_project_file_action"):
             return
         local_project = self.project.is_open and not self.project.remote
         selected_file = self.selected_project_file() if hasattr(self, "project_tree") else None
+        selected_workbook_id = normalize_workbook_id(selected_file.relative_path) if selected_file else ""
+        online = self.collaboration is not None and self.collaboration.running
+        can_open_selected = bool(
+            selected_file
+            and selected_file.openable
+            and (local_project or selected_workbook_id in self.project_workbooks or online)
+        )
         self.refresh_project_action.setEnabled(bool(local_project and self.project.root_path))
         self.close_project_action.setEnabled(self.project.is_open)
-        self.open_project_file_action.setEnabled(bool(selected_file and selected_file.openable and local_project))
-        self.share_project_action.setEnabled(self.collaboration is not None and self.collaboration.running)
+        self.open_project_file_action.setEnabled(can_open_selected)
+        self.share_project_action.setEnabled(online)
 
     def reload_formula_templates(self, _category: str | None = None) -> None:
         if not hasattr(self, "formula_template_box"):
@@ -1292,6 +1309,14 @@ class SpreadsheetWindow(QMainWindow):
             message["workbooks"] = workbooks
         return message
 
+    def build_project_workbook_snapshot_message(self, workbook_id: str, workbook: WorkbookData) -> dict:
+        return {
+            "type": "snapshot",
+            "workbook_id": normalize_workbook_id(workbook_id),
+            "workbook": workbook_to_payload(workbook),
+            "project": project_to_payload(self.project),
+        }
+
     def project_workbooks_payload(self) -> dict:
         self.cache_active_workbook()
         return {
@@ -1324,6 +1349,30 @@ class SpreadsheetWindow(QMainWindow):
         path = self.project_path_for_workbook_id(workbook_id)
         if path is not None:
             workbook.path = str(path)
+        return workbook
+
+    def load_project_workbook_for_sharing(self, workbook_id: str) -> WorkbookData | None:
+        workbook_id = normalize_workbook_id(workbook_id)
+        if not workbook_id:
+            return None
+        if workbook_id == self.active_workbook_id:
+            self.cache_active_workbook()
+            return self.workbook
+        if workbook_id in self.project_workbooks:
+            return self.project_workbooks[workbook_id]
+        project_file = self.project.file_by_relative_path(workbook_id)
+        if project_file is None or not project_file.openable:
+            return None
+        path = self.project.absolute_path_for(project_file)
+        if path is None:
+            return None
+        try:
+            workbook = load_xlsx(path) if project_file.extension == ".xlsx" else load_csv(path)
+        except Exception as exc:
+            self.statusBar().showMessage(f"Could not share project file {workbook_id}: {exc}")
+            return None
+        workbook = self.prepare_project_workbook(workbook_id, workbook)
+        self.project_workbooks[workbook_id] = workbook
         return workbook
 
     def apply_startup_settings(self, *, restart: bool = False) -> None:
@@ -1611,6 +1660,8 @@ class SpreadsheetWindow(QMainWindow):
                 self.apply_remote_snapshot(message)
             elif message_type == "project_snapshot":
                 self.apply_remote_project_snapshot(message)
+            elif message_type == "workbook_request":
+                self.respond_to_workbook_request(message)
             elif message_type == "cell_update":
                 self.apply_remote_cell_update(message)
             elif message_type == "sheet_add":
@@ -1630,6 +1681,7 @@ class SpreadsheetWindow(QMainWindow):
         show_workbook = (
             not workbook_id
             or workbook_id == self.active_workbook_id
+            or workbook_id == self.pending_project_open_id
             or (not self.active_workbook_id and self.current_path is None and self.is_default_blank_workbook())
         )
         self.applying_remote_update = True
@@ -1643,6 +1695,8 @@ class SpreadsheetWindow(QMainWindow):
                     self.project_workbooks[workbook_id] = self.prepare_project_workbook(workbook_id, workbook)
                 if show_workbook:
                     self.load_workbook(workbook, workbook_id=workbook_id or None)
+                    if workbook_id == self.pending_project_open_id:
+                        self.pending_project_open_id = ""
         finally:
             self.applying_remote_update = False
         self.update_formula_bar()
@@ -1651,6 +1705,17 @@ class SpreadsheetWindow(QMainWindow):
             self.statusBar().showMessage("Workbook synchronized")
         elif workbook_id:
             self.statusBar().showMessage(f"Synchronized in background: {workbook_id}")
+
+    def respond_to_workbook_request(self, message: dict) -> None:
+        if self.collaboration_role != "Host":
+            return
+        workbook_id = self.message_workbook_id(message)
+        workbook = self.load_project_workbook_for_sharing(workbook_id)
+        if workbook is None:
+            self.statusBar().showMessage(f"Requested project file is unavailable: {workbook_id}")
+            return
+        self.send_collaboration_message(self.build_project_workbook_snapshot_message(workbook_id, workbook))
+        self.statusBar().showMessage(f"Shared project file: {workbook_id}")
 
     def apply_remote_project_snapshot(self, message: dict) -> None:
         local_root = self.project.root_path if self.project.root_path and not self.project.remote else None

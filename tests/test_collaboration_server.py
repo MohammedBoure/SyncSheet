@@ -6,8 +6,9 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication
 
 from pyexcel_lite.collaboration_server import CollaborationWorkbookServer
-from pyexcel_lite.network import cell_update_message, sheet_message, structure_message
+from pyexcel_lite.network import cell_update_message, sheet_message, structure_message, workbook_request_message
 from pyexcel_lite.project import project_snapshot_message, scan_project_folder
+from pyexcel_lite.workbook import WorkbookData
 
 
 class CollaborationWorkbookServerTest(unittest.TestCase):
@@ -54,6 +55,20 @@ class CollaborationWorkbookServerTest(unittest.TestCase):
 
             restored = CollaborationWorkbookServer(state_path=state_path)
             self.assertEqual(restored.workbooks["reports/client.xlsx"].sheets[0].raw_value(0, 0), "project value")
+
+    def test_project_workbook_request_broadcasts_cached_snapshot(self):
+        service = CollaborationWorkbookServer(state_path=None)
+        workbook = WorkbookData()
+        workbook.sheets[0].set_value(0, 0, "cached")
+        service.workbooks["reports/client.xlsx"] = workbook
+        sent = []
+        service.server.send = sent.append
+
+        service.apply_message(workbook_request_message("reports/client.xlsx"))
+
+        self.assertEqual(sent[0]["type"], "snapshot")
+        self.assertEqual(sent[0]["workbook_id"], "reports/client.xlsx")
+        self.assertEqual(sent[0]["workbook"]["sheets"][0]["cells"][0]["value"], "cached")
 
     def test_sheet_and_structure_messages_update_authoritative_workbook(self):
         service = CollaborationWorkbookServer(state_path=None)

@@ -161,6 +161,10 @@ def sheet_message(message_type: str, sheet_index: int, sheet_name: str = "", wor
     return add_workbook_id({"type": message_type, "sheet_index": sheet_index, "sheet_name": sheet_name}, workbook_id)
 
 
+def workbook_request_message(workbook_id: object) -> dict:
+    return add_workbook_id({"type": "workbook_request"}, workbook_id)
+
+
 def structure_message(
     message_type: str,
     sheet_index: int,

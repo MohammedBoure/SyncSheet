@@ -1,6 +1,8 @@
 import os
+import tempfile
 import time
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,9 +16,11 @@ from pyexcel_lite.network import (
     CollaborationServer,
     cell_update_message,
     local_join_addresses,
+    workbook_request_message,
     workbook_from_payload,
     workbook_to_payload,
 )
+from pyexcel_lite.project import ProjectData, ProjectFile, scan_project_folder
 from pyexcel_lite.workbook import WorkbookData
 
 
@@ -130,6 +134,55 @@ class CollaborationTest(unittest.TestCase):
             self.assertEqual(window.current_sheet.raw_value(0, 0), "background")
         finally:
             window.close()
+
+    def test_remote_project_file_open_requests_missing_workbook(self):
+        window = SpreadsheetWindow()
+        endpoint = RecordingEndpoint()
+        try:
+            window.project = ProjectData(
+                name="Shared",
+                files=[
+                    ProjectFile(
+                        relative_path="reports/budget.xlsx",
+                        kind="workbook",
+                        openable=True,
+                    )
+                ],
+                remote=True,
+            )
+            window.collaboration = endpoint
+            window.collaboration_role = "Client"
+            window.selected_project_file = lambda: window.project.files[0]
+
+            window.open_selected_project_file()
+
+            self.assertEqual(endpoint.sent, [workbook_request_message("reports/budget.xlsx")])
+            self.assertEqual(window.pending_project_open_id, "reports/budget.xlsx")
+        finally:
+            window.close()
+
+    def test_host_answers_project_file_request_from_local_project_without_switching_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            reports = root / "reports"
+            reports.mkdir(parents=True)
+            (reports / "budget.csv").write_text("name,total\nGold,42\n", encoding="utf-8")
+            window = SpreadsheetWindow()
+            endpoint = RecordingEndpoint()
+            try:
+                window.project = scan_project_folder(root)
+                window.collaboration = endpoint
+                window.collaboration_role = "Host"
+
+                window.on_collaboration_message(workbook_request_message("reports/budget.csv"))
+
+                self.assertEqual(window.current_sheet.raw_value(0, 0), "")
+                self.assertEqual(endpoint.sent[0]["type"], "snapshot")
+                self.assertEqual(endpoint.sent[0]["workbook_id"], "reports/budget.csv")
+                workbook = workbook_from_payload(endpoint.sent[0]["workbook"])
+                self.assertEqual(workbook.sheets[0].raw_value(1, 1), "42")
+            finally:
+                window.close()
 
     def test_remote_sheet_messages_keep_sheet_list_in_sync(self):
         window = SpreadsheetWindow()

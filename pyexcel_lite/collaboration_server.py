@@ -19,6 +19,7 @@ from .network import (
     workbook_from_payload,
     workbook_to_payload,
 )
+from .io_xlsx import load_csv, load_xlsx
 from .project import ProjectData, project_from_payload, project_to_payload
 from .workbook import WorkbookData, WorksheetData
 
@@ -75,6 +76,8 @@ class CollaborationWorkbookServer(QObject):
 
     @Slot(dict)
     def apply_message(self, message: dict) -> None:
+        if self.respond_to_workbook_request(message):
+            return
         if self.apply_workbook_message(message):
             self.save_state()
 
@@ -105,6 +108,8 @@ class CollaborationWorkbookServer(QObject):
                     self.project = project_from_payload(payload)
                     changed = True
                 return changed
+            if message_type == "workbook_request":
+                return False
             if message_type == "cell_update":
                 return self._apply_cell_update(message)
             if message_type == "sheet_add":
@@ -116,6 +121,25 @@ class CollaborationWorkbookServer(QObject):
             if message_type in {"insert_rows", "remove_rows", "insert_columns", "remove_columns"}:
                 return self._apply_structure_update(message)
         return False
+
+    def respond_to_workbook_request(self, message: dict) -> bool:
+        if str(message.get("type") or "") != "workbook_request":
+            return False
+        workbook_id = normalize_workbook_id(message.get("workbook_id"))
+        if not workbook_id:
+            return True
+        workbook = self._load_project_workbook_for_request(workbook_id)
+        if workbook is None:
+            return True
+        self.server.send(
+            {
+                "type": "snapshot",
+                "workbook_id": workbook_id,
+                "workbook": workbook_to_payload(workbook),
+                "project": project_to_payload(self.project),
+            }
+        )
+        return True
 
     def _apply_cell_update(self, message: dict) -> bool:
         workbook = self._resolve_workbook(message, create=True)
@@ -196,6 +220,23 @@ class CollaborationWorkbookServer(QObject):
         if workbook_id not in self.workbooks and create:
             self.workbooks[workbook_id] = WorkbookData()
         return self.workbooks.get(workbook_id)
+
+    def _load_project_workbook_for_request(self, workbook_id: str) -> WorkbookData | None:
+        if workbook_id in self.workbooks:
+            return self.workbooks[workbook_id]
+        project_file = self.project.file_by_relative_path(workbook_id)
+        if project_file is None or not project_file.openable:
+            return None
+        path = self.project.absolute_path_for(project_file)
+        if path is None or not path.exists():
+            return None
+        try:
+            workbook = load_xlsx(path) if project_file.extension == ".xlsx" else load_csv(path)
+        except Exception:
+            return None
+        self.workbooks[workbook_id] = workbook
+        self.save_state()
+        return workbook
 
     def _resolve_sheet(self, workbook: WorkbookData, message: dict, *, create: bool = False) -> WorksheetData | None:
         sheet_index = self._safe_int(message.get("sheet_index"), -1)

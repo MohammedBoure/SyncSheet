@@ -87,6 +87,7 @@ XLSX and CSV files can be opened directly from the project tree; opening a proje
 
 Use `Project > Share Project` while connected to a host or shared server to synchronize the project structure with the team.
 Each openable project file is tracked by its relative path. If one user edits `reports/budget.xlsx` while another user is viewing a different file, the update is cached in the background and appears when that second user opens `reports/budget.xlsx`.
+If a client opens a project spreadsheet that is not cached locally yet, it requests that workbook from the host or shared server and opens it when the snapshot arrives.
 The shared server stores the active workbook, synchronized project workbooks, and the latest project snapshot, so new clients receive the same workspace context when they join.
 
 ## Test
