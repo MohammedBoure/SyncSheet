@@ -4,7 +4,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea, QToolBar, QToolButton
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea, QTabWidget, QToolButton
 
 from pyexcel_lite.main import SpreadsheetWindow
 
@@ -48,22 +48,27 @@ class RibbonIconTest(unittest.TestCase):
         finally:
             window.close()
 
-    def test_top_toolbars_use_excel_like_icon_layout(self):
+    def test_top_ribbon_uses_excel_like_tabs(self):
         window = SpreadsheetWindow()
         try:
-            toolbars = window.findChildren(QToolBar)
-            icon_toolbars = [toolbar for toolbar in toolbars if toolbar.windowTitle() in {"File", "Format"}]
-            self.assertGreaterEqual(len(icon_toolbars), 2)
-            for toolbar in icon_toolbars:
-                self.assertEqual(toolbar.toolButtonStyle(), Qt.ToolButtonTextUnderIcon)
+            self.assertIsInstance(window.ribbon, QTabWidget)
+            self.assertEqual(window.ribbon.objectName(), "excelRibbon")
+            self.assertEqual(
+                [window.ribbon.tabText(index) for index in range(window.ribbon.count())],
+                ["Home", "Insert", "Formulas", "Data", "View", "Network"],
+            )
+            ribbon_buttons = window.ribbon.findChildren(QToolButton, "ribbonButton")
+            self.assertGreaterEqual(len(ribbon_buttons), 20)
+            self.assertTrue(all(not button.icon().isNull() for button in ribbon_buttons if button.defaultAction() or button.text()))
         finally:
             window.close()
 
-    def test_sidebar_uses_section_cards_and_icons(self):
+    def test_former_sidebar_is_top_panel_with_section_cards_and_icons(self):
         window = SpreadsheetWindow()
         try:
             self.assertIsInstance(window.inspector, QScrollArea)
             self.assertEqual(window.inspector.objectName(), "inspectorPanel")
+            self.assertLess(window.inspector.height(), window.height())
 
             sections = window.inspector.findChildren(QFrame, "inspectorSection")
             titles = [label.text() for label in window.inspector.findChildren(QLabel, "inspectorSectionTitle")]

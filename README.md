@@ -5,8 +5,8 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 ## Features
 
 - Excel-style grid with row and column headers.
-- Excel-like top ribbon with modern icons for file, sheet, edit, formatting, and zoom commands.
-- Professional right sidebar with icon-led sections for selection, stats, network collaboration, formulas, algorithms, and charts.
+- Excel-like tabbed ribbon with Home, Insert, Formulas, Data, View, and Network command pages.
+- Professional top panel under the ribbon with icon-led sections for selection, stats, network collaboration, formulas, algorithms, and charts.
 - Large-table performance improvements with batched paste/clear operations, partial redraws, and cached formula results.
 - Undo and redo for cell edits, paste operations, clears, and generated formulas.
 - Bar, line, and pie charts from the selected cells.

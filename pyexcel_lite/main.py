@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QItemSelection, QModelIndex, QSize, Qt
+from PySide6.QtCore import QItemSelection, QModelIndex, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,11 +22,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QSpinBox,
-    QSplitter,
     QStatusBar,
     QTableView,
     QTabWidget,
-    QToolBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -247,21 +245,24 @@ class SpreadsheetWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self._build_menu()
-        self._build_toolbars()
         self._apply_ribbon_style()
 
+        self.ribbon = self._build_ribbon()
+        self.inspector = self._build_inspector()
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(False)
         self.tabs.setMovable(True)
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        self.inspector = self._build_inspector()
-        splitter = QSplitter()
-        splitter.addWidget(self.tabs)
-        splitter.addWidget(self.inspector)
-        splitter.setStretchFactor(0, 5)
-        splitter.setStretchFactor(1, 1)
-        self.setCentralWidget(splitter)
+        central = QWidget()
+        central.setObjectName("mainSurface")
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.ribbon)
+        layout.addWidget(self.inspector)
+        layout.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready")
@@ -284,93 +285,191 @@ class SpreadsheetWindow(QMainWindow):
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction(self.about_action)
 
-    def _build_toolbars(self) -> None:
-        file_bar = QToolBar("File")
-        self._configure_ribbon_toolbar(file_bar)
-        self.addToolBar(file_bar)
-        file_bar.addActions([self.new_action, self.open_action, self.save_action, self.save_as_action])
-        file_bar.addSeparator()
-        file_bar.addActions([self.undo_action, self.redo_action])
-        file_bar.addSeparator()
-        file_bar.addActions([self.add_sheet_action, self.export_csv_action])
-        file_bar.addSeparator()
-        file_bar.addAction(self.chart_action)
-        file_bar.addSeparator()
-        file_bar.addActions([self.host_network_action, self.join_network_action, self.leave_network_action])
-        file_bar.addSeparator()
-        file_bar.addActions([self.zoom_out_action, self.zoom_reset_action, self.zoom_in_action])
-        self.zoom_box = QSpinBox()
-        self.zoom_box.setRange(40, 220)
-        self.zoom_box.setSingleStep(10)
-        self.zoom_box.setSuffix("%")
-        self.zoom_box.setValue(self.zoom_percent)
-        self.zoom_box.valueChanged.connect(self.set_zoom_percent)
-        file_bar.addWidget(QLabel("Zoom"))
-        file_bar.addWidget(self.zoom_box)
+    def _build_ribbon(self) -> QTabWidget:
+        ribbon = QTabWidget()
+        ribbon.setObjectName("excelRibbon")
+        ribbon.setDocumentMode(True)
+        ribbon.setTabPosition(QTabWidget.North)
+        ribbon.setMaximumHeight(172)
+        ribbon.addTab(self._home_ribbon_page(), "Home")
+        ribbon.addTab(self._insert_ribbon_page(), "Insert")
+        ribbon.addTab(self._formulas_ribbon_page(), "Formulas")
+        ribbon.addTab(self._data_ribbon_page(), "Data")
+        ribbon.addTab(self._view_ribbon_page(), "View")
+        ribbon.addTab(self._network_ribbon_page(), "Network")
+        return ribbon
 
-        formula_bar = QToolBar("Formula")
-        self._configure_ribbon_toolbar(formula_bar, text_under_icon=False)
-        self.addToolBarBreak()
-        self.addToolBar(formula_bar)
+    def _ribbon_page(self) -> tuple[QWidget, QHBoxLayout]:
+        page = QWidget()
+        page.setObjectName("ribbonPage")
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(8, 7, 8, 7)
+        layout.setSpacing(8)
+        return page, layout
+
+    def _ribbon_group(self, parent_layout: QHBoxLayout, title: str) -> QHBoxLayout:
+        frame = QFrame()
+        frame.setObjectName("ribbonGroup")
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setContentsMargins(8, 5, 8, 4)
+        frame_layout.setSpacing(4)
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(5)
+        label = QLabel(title)
+        label.setObjectName("ribbonGroupTitle")
+        label.setAlignment(Qt.AlignCenter)
+        frame_layout.addLayout(controls)
+        frame_layout.addWidget(label)
+        parent_layout.addWidget(frame)
+        return controls
+
+    def _ribbon_action_button(self, action: QAction, style: Qt.ToolButtonStyle = Qt.ToolButtonTextUnderIcon) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("ribbonButton")
+        button.setDefaultAction(action)
+        button.setToolButtonStyle(style)
+        button.setAutoRaise(False)
+        return button
+
+    def _ribbon_callback_button(self, text: str, icon_name: str, callback) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("ribbonButton")
+        button.setText(text)
+        button.setIcon(app_icon(icon_name))
+        button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        button.setAutoRaise(False)
+        button.clicked.connect(callback)
+        return button
+
+    def _ribbon_small_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("ribbonInlineLabel")
+        return label
+
+    def _home_ribbon_page(self) -> QWidget:
+        page, layout = self._ribbon_page()
+        workbook = self._ribbon_group(layout, "Workbook")
+        for action in (self.new_action, self.open_action, self.save_action, self.save_as_action):
+            workbook.addWidget(self._ribbon_action_button(action))
+
+        edit = self._ribbon_group(layout, "Edit")
+        for action in (self.undo_action, self.redo_action, self.clear_action):
+            edit.addWidget(self._ribbon_action_button(action))
+
+        font = self._ribbon_group(layout, "Font")
+        self.font_box = QFontComboBox()
+        self.font_box.setMaximumWidth(170)
+        self.font_box.currentFontChanged.connect(lambda font: self.apply_style(font_family=font.family()))
+        self.size_box = QSpinBox()
+        self.size_box.setRange(6, 48)
+        self.size_box.setValue(10)
+        self.size_box.setMaximumWidth(64)
+        self.size_box.valueChanged.connect(lambda value: self.apply_style(font_size=value))
+        self.bold_button = self._format_button("B", "bold", "Bold", lambda checked: self.apply_style(bold=checked))
+        self.italic_button = self._format_button("I", "italic", "Italic", lambda checked: self.apply_style(italic=checked))
+        self.underline_button = self._format_button("U", "underline", "Underline", lambda checked: self.apply_style(underline=checked))
+        for control in (self.font_box, self.size_box, self.bold_button, self.italic_button, self.underline_button):
+            font.addWidget(control)
+
+        color = self._ribbon_group(layout, "Color")
+        self.text_color_button = self._ribbon_callback_button("Text", "text_color", lambda: self.pick_color("text_color"))
+        self.fill_color_button = self._ribbon_callback_button("Fill", "fill_color", lambda: self.pick_color("fill_color"))
+        color.addWidget(self.text_color_button)
+        color.addWidget(self.fill_color_button)
+
+        alignment = self._ribbon_group(layout, "Alignment")
+        self.align_box = QComboBox()
+        self.align_box.addItems(["general", "left", "center", "right"])
+        self.align_box.currentTextChanged.connect(lambda value: self.apply_style(horizontal=value))
+        alignment.addWidget(self._ribbon_small_label("Align"))
+        alignment.addWidget(self.align_box)
+
+        layout.addStretch(1)
+        return page
+
+    def _insert_ribbon_page(self) -> QWidget:
+        page, layout = self._ribbon_page()
+        sheets = self._ribbon_group(layout, "Sheets")
+        for action in (self.add_sheet_action, self.rename_sheet_action, self.delete_sheet_action):
+            sheets.addWidget(self._ribbon_action_button(action))
+
+        rows_columns = self._ribbon_group(layout, "Rows & Columns")
+        for action in (self.insert_row_action, self.delete_row_action, self.insert_column_action, self.delete_column_action):
+            rows_columns.addWidget(self._ribbon_action_button(action))
+
+        charts = self._ribbon_group(layout, "Charts")
+        charts.addWidget(self._ribbon_action_button(self.chart_action))
+
+        layout.addStretch(1)
+        return page
+
+    def _formulas_ribbon_page(self) -> QWidget:
+        page, layout = self._ribbon_page()
+        formula_bar = self._ribbon_group(layout, "Formula Bar")
         self.name_box = QLineEdit()
         self.name_box.setReadOnly(True)
         self.name_box.setFixedWidth(90)
         self.formula_input = QLineEdit()
         self.formula_input.setPlaceholderText("Type a value or formula, for example =SUM(A1:A5)")
         self.formula_input.returnPressed.connect(self.commit_formula_bar)
-        formula_icon = QToolButton()
-        formula_icon.setIcon(app_icon("formula"))
-        formula_icon.setAutoRaise(True)
-        formula_icon.setToolTip("Formula bar")
-        formula_bar.addWidget(QLabel("Cell"))
+        self.formula_input.setMinimumWidth(420)
+        formula_bar.addWidget(self._ribbon_small_label("Cell"))
         formula_bar.addWidget(self.name_box)
+        formula_icon = QToolButton()
+        formula_icon.setObjectName("ribbonButton")
+        formula_icon.setIcon(app_icon("formula"))
+        formula_icon.setAutoRaise(False)
+        formula_icon.setToolTip("Formula bar")
         formula_bar.addWidget(formula_icon)
         formula_bar.addWidget(self.formula_input)
 
-        format_bar = QToolBar("Format")
-        self._configure_ribbon_toolbar(format_bar)
-        self.addToolBarBreak()
-        self.addToolBar(format_bar)
-        self.font_box = QFontComboBox()
-        self.font_box.currentFontChanged.connect(lambda font: self.apply_style(font_family=font.family()))
-        self.size_box = QSpinBox()
-        self.size_box.setRange(6, 48)
-        self.size_box.setValue(10)
-        self.size_box.valueChanged.connect(lambda value: self.apply_style(font_size=value))
-        self.bold_button = self._format_button("B", "bold", "Bold", lambda checked: self.apply_style(bold=checked))
-        self.italic_button = self._format_button("I", "italic", "Italic", lambda checked: self.apply_style(italic=checked))
-        self.underline_button = self._format_button("U", "underline", "Underline", lambda checked: self.apply_style(underline=checked))
-        self.align_box = QComboBox()
-        self.align_box.addItems(["general", "left", "center", "right"])
-        self.align_box.currentTextChanged.connect(lambda value: self.apply_style(horizontal=value))
+        library = self._ribbon_group(layout, "Library")
+        library.addWidget(self._ribbon_callback_button("Apply", "formula", self.apply_formula_template))
+        library.addWidget(self._ribbon_callback_button("Insert", "formula", self.insert_formula_template))
+        library.addWidget(self._ribbon_callback_button("Fill", "formula", self.fill_selection_with_custom_algorithm))
+        layout.addStretch(1)
+        return page
+
+    def _data_ribbon_page(self) -> QWidget:
+        page, layout = self._ribbon_page()
+        import_export = self._ribbon_group(layout, "Import & Export")
+        import_export.addWidget(self._ribbon_action_button(self.open_action))
+        import_export.addWidget(self._ribbon_action_button(self.export_csv_action))
+
+        number = self._ribbon_group(layout, "Number")
         self.number_format_box = QComboBox()
         self.number_format_box.addItems(["General", "0", "0.00", "#,##0", "#,##0.00", "0%", "$#,##0.00", "yyyy-mm-dd"])
         self.number_format_box.currentTextChanged.connect(lambda value: self.apply_style(number_format=value))
-        self.text_color_button = QToolButton()
-        self.text_color_button.setText("Text")
-        self.text_color_button.setIcon(app_icon("text_color"))
-        self.text_color_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.text_color_button.setToolTip("Text color")
-        self.text_color_button.setAutoRaise(True)
-        self.text_color_button.clicked.connect(lambda: self.pick_color("text_color"))
-        self.fill_color_button = QToolButton()
-        self.fill_color_button.setText("Fill")
-        self.fill_color_button.setIcon(app_icon("fill_color"))
-        self.fill_color_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.fill_color_button.setToolTip("Fill color")
-        self.fill_color_button.setAutoRaise(True)
-        self.fill_color_button.clicked.connect(lambda: self.pick_color("fill_color"))
-        for control in [self.font_box, self.size_box, self.bold_button, self.italic_button, self.underline_button, QLabel("Align"), self.align_box, QLabel("Format"), self.number_format_box, self.text_color_button, self.fill_color_button]:
-            format_bar.addWidget(control)
-        format_bar.addSeparator()
-        format_bar.addActions([self.insert_row_action, self.delete_row_action, self.insert_column_action, self.delete_column_action, self.clear_action])
+        number.addWidget(self._ribbon_small_label("Format"))
+        number.addWidget(self.number_format_box)
 
-    def _configure_ribbon_toolbar(self, toolbar: QToolBar, text_under_icon: bool = True) -> None:
-        toolbar.setMovable(False)
-        toolbar.setFloatable(False)
-        toolbar.setIconSize(QSize(24, 24))
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon if text_under_icon else Qt.ToolButtonIconOnly)
-        toolbar.setAllowedAreas(Qt.TopToolBarArea)
+        layout.addStretch(1)
+        return page
+
+    def _view_ribbon_page(self) -> QWidget:
+        page, layout = self._ribbon_page()
+        zoom = self._ribbon_group(layout, "Zoom")
+        for action in (self.zoom_out_action, self.zoom_reset_action, self.zoom_in_action):
+            zoom.addWidget(self._ribbon_action_button(action))
+        self.zoom_box = QSpinBox()
+        self.zoom_box.setRange(40, 220)
+        self.zoom_box.setSingleStep(10)
+        self.zoom_box.setSuffix("%")
+        self.zoom_box.setValue(self.zoom_percent)
+        self.zoom_box.valueChanged.connect(self.set_zoom_percent)
+        zoom.addWidget(self._ribbon_small_label("Value"))
+        zoom.addWidget(self.zoom_box)
+        layout.addStretch(1)
+        return page
+
+    def _network_ribbon_page(self) -> QWidget:
+        page, layout = self._ribbon_page()
+        session = self._ribbon_group(layout, "Session")
+        for action in (self.host_network_action, self.join_network_action, self.leave_network_action):
+            session.addWidget(self._ribbon_action_button(action))
+        layout.addStretch(1)
+        return page
 
     def _apply_ribbon_style(self) -> None:
         self.setStyleSheet(
@@ -412,6 +511,72 @@ class SpreadsheetWindow(QMainWindow):
                 padding: 4px 7px;
                 background: #ffffff;
             }
+            QTabWidget#excelRibbon {
+                background: #ffffff;
+                border: 0;
+            }
+            QTabWidget#excelRibbon::pane {
+                background: #f8fafc;
+                border: 0;
+                border-top: 1px solid #d0d7de;
+                border-bottom: 1px solid #cfd7df;
+            }
+            QTabWidget#excelRibbon QTabBar::tab {
+                background: #ffffff;
+                color: #1f2937;
+                padding: 7px 17px;
+                border: 0;
+                border-right: 1px solid #e5e7eb;
+            }
+            QTabWidget#excelRibbon QTabBar::tab:selected {
+                color: #107c41;
+                background: #f8fafc;
+                border-bottom: 2px solid #107c41;
+                font-weight: 600;
+            }
+            QWidget#ribbonPage {
+                background: #f8fafc;
+            }
+            QFrame#ribbonGroup {
+                background: #ffffff;
+                border: 1px solid #d8dee4;
+                border-radius: 7px;
+            }
+            QLabel#ribbonGroupTitle {
+                color: #6b7280;
+                font-size: 10px;
+            }
+            QLabel#ribbonInlineLabel {
+                color: #4b5563;
+                font-size: 11px;
+            }
+            QToolButton#ribbonButton {
+                border: 1px solid transparent;
+                border-radius: 6px;
+                color: #1f2937;
+                min-width: 44px;
+                padding: 5px 7px;
+                background: #ffffff;
+            }
+            QToolButton#ribbonButton:hover {
+                background: #eef7f1;
+                border-color: #a8d5ba;
+            }
+            QToolButton#ribbonButton:pressed,
+            QToolButton#ribbonButton:checked {
+                background: #dff3e8;
+                border-color: #107c41;
+            }
+            QFrame#ribbonGroup QComboBox,
+            QFrame#ribbonGroup QSpinBox,
+            QFrame#ribbonGroup QLineEdit,
+            QFrame#ribbonGroup QFontComboBox {
+                border: 1px solid #cfd7df;
+                border-radius: 6px;
+                padding: 5px 7px;
+                background: #ffffff;
+                color: #111827;
+            }
             QMenuBar {
                 background: #ffffff;
                 border-bottom: 1px solid #e5e7eb;
@@ -422,7 +587,7 @@ class SpreadsheetWindow(QMainWindow):
             QScrollArea#inspectorPanel {
                 background: #f6f8fa;
                 border: 0;
-                border-left: 1px solid #d0d7de;
+                border-bottom: 1px solid #d0d7de;
             }
             QWidget#inspectorContent {
                 background: #f6f8fa;
@@ -472,12 +637,13 @@ class SpreadsheetWindow(QMainWindow):
 
     def _format_button(self, text: str, icon_name: str, tooltip: str, callback) -> QToolButton:
         button = QToolButton()
+        button.setObjectName("ribbonButton")
         button.setText(text)
         button.setIcon(app_icon(icon_name))
         button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
         button.setCheckable(True)
         button.setToolTip(tooltip)
-        button.setAutoRaise(True)
+        button.setAutoRaise(False)
         button.toggled.connect(callback)
         return button
 
@@ -529,16 +695,21 @@ class SpreadsheetWindow(QMainWindow):
     def _build_inspector(self) -> QWidget:
         scroll = QScrollArea()
         scroll.setObjectName("inspectorPanel")
-        scroll.setWidgetResizable(True)
+        scroll.setWidgetResizable(False)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFixedHeight(258)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         widget = QWidget()
         widget.setObjectName("inspectorContent")
-        layout = QVBoxLayout(widget)
+        widget.setMinimumWidth(1710)
+        layout = QHBoxLayout(widget)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
         selection_section, selection_layout = self._inspector_section("Selection", "selection")
+        selection_section.setFixedWidth(210)
         self.selection_label = QLabel("No selection")
         self.selection_label.setObjectName("inspectorValue")
         self.selection_label.setWordWrap(True)
@@ -546,6 +717,7 @@ class SpreadsheetWindow(QMainWindow):
         layout.addWidget(selection_section)
 
         stats_section, stats_layout = self._inspector_section("Quick Stats", "stats")
+        stats_section.setFixedWidth(210)
         self.stats_label = QLabel("Sum: 0\nAverage: 0\nCount: 0")
         self.stats_label.setObjectName("inspectorValue")
         self.stats_label.setWordWrap(True)
@@ -553,6 +725,7 @@ class SpreadsheetWindow(QMainWindow):
         layout.addWidget(stats_section)
 
         network_section, network_layout = self._inspector_section("Network", "network_host")
+        network_section.setFixedWidth(300)
         self.network_status_label = QLabel("Offline")
         self.network_status_label.setObjectName("inspectorValue")
         self.network_status_label.setWordWrap(True)
@@ -566,6 +739,7 @@ class SpreadsheetWindow(QMainWindow):
         layout.addWidget(network_section)
 
         formula_section, formula_layout = self._inspector_section("Formula Library", "formula")
+        formula_section.setFixedWidth(300)
         self.formula_category_box = QComboBox()
         self.formula_category_box.addItems(FORMULA_LIBRARY.keys())
         self.formula_category_box.currentTextChanged.connect(self.reload_formula_templates)
@@ -596,6 +770,7 @@ class SpreadsheetWindow(QMainWindow):
         layout.addWidget(formula_section)
 
         algorithm_section, algorithm_layout = self._inspector_section("Cell Algorithm", "formula")
+        algorithm_section.setFixedWidth(250)
         self.custom_algorithm_input = QLineEdit()
         self.custom_algorithm_input.setPlaceholderText("=A{row}*2")
         custom_buttons = QHBoxLayout()
@@ -622,6 +797,7 @@ class SpreadsheetWindow(QMainWindow):
         self.reload_formula_templates()
 
         chart_section, chart_layout = self._inspector_section("Charts", "chart")
+        chart_section.setFixedWidth(390)
         self.chart_type_box = QComboBox()
         self.chart_type_box.addItems(["Bar", "Line", "Pie"])
         self.chart_title_input = QLineEdit()
@@ -633,6 +809,8 @@ class SpreadsheetWindow(QMainWindow):
         self.create_chart_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.create_chart_button.clicked.connect(self.create_chart_from_selection)
         self.chart_widget = ChartWidget()
+        self.chart_widget.setMinimumHeight(112)
+        self.chart_widget.setMaximumHeight(112)
         chart_layout.addWidget(self.chart_type_box)
         chart_layout.addWidget(self.chart_title_input)
         chart_layout.addWidget(self.create_chart_button)
