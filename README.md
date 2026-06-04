@@ -11,6 +11,8 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 - Undo and redo for cell edits, paste operations, clears, and generated formulas.
 - Bar, line, and pie charts from the selected cells.
 - Realtime LAN collaboration with Host, Join, and Leave controls so multiple users can edit the same workbook together.
+- Network startup settings that can launch the app in manual mode, connect directly to a shared server, or make the current program host a server automatically.
+- Standalone shared-workbook server for LAN client/server use, with JSON state persistence.
 - TCP socket sync for workbook snapshots, cell edits, paste/clear batches, sheet add/rename/delete, and row/column insert/delete operations.
 - Formula bar with live display and raw formula editing.
 - Formula library for applying arithmetic, statistical, logical, lookup, and custom cell algorithms to the active cell or selected range.
@@ -52,6 +54,21 @@ On each client computer on the same LAN, choose `Network > Join` and enter that 
 
 The host sends the current workbook as a snapshot when a user joins, then all users receive live TCP socket updates for cell edits, pasted ranges, sheet changes, and row or column structure changes.
 Connected sockets use TCP keepalive, blocking reads after the initial connect timeout, app-level ping/pong heartbeats, and automatic client retry when the server connection drops.
+
+Use `Network > Startup` to choose what happens when the program opens:
+
+- `Manual network controls`: start offline and use Host or Join manually.
+- `Connect to shared server`: connect to a fixed LAN IP and port immediately.
+- `Run this program as server`: start hosting immediately from this program.
+
+For a dedicated shared server on a LAN computer:
+
+```powershell
+D:\git\GoldShop\venv\Scripts\python.exe run_collaboration_server.py --host 0.0.0.0 --port 8765
+```
+
+Then set each client to `Network > Startup > Connect to shared server` and enter the server IP and port.
+The standalone server keeps the shared workbook in `shared_workbook_state.json` by default, so the latest central state can survive a server restart.
 
 ## Test
 

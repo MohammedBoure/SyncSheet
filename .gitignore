@@ -5,3 +5,5 @@ __pycache__/
 .ruff_cache/
 *.xlsx
 *.csv
+pyexcel_lite_settings.json
+shared_workbook_state.json

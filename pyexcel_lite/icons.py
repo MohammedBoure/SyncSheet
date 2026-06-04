@@ -228,6 +228,24 @@ def _draw_icon(p: QPainter, name: str, size: int) -> None:
             p.drawLine(QPointF(19, 22), QPointF(15, 26))
         else:
             _x(p, QPointF(14, 14), 3.7, RED)
+    elif name == "settings":
+        p.setPen(_pen(GREEN, 2))
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(QRectF(8, 8, 12, 12))
+        p.setBrush(QColor(GREEN_LIGHT))
+        p.drawEllipse(QRectF(11.5, 11.5, 5, 5))
+        p.setPen(_pen(INK, 2))
+        for start, end in (
+            (QPointF(14, 3), QPointF(14, 7)),
+            (QPointF(14, 21), QPointF(14, 25)),
+            (QPointF(3, 14), QPointF(7, 14)),
+            (QPointF(21, 14), QPointF(25, 14)),
+            (QPointF(6, 6), QPointF(9, 9)),
+            (QPointF(19, 19), QPointF(22, 22)),
+            (QPointF(22, 6), QPointF(19, 9)),
+            (QPointF(9, 19), QPointF(6, 22)),
+        ):
+            p.drawLine(start, end)
     elif name == "zoom_in":
         _magnifier(p, True)
     elif name == "zoom_out":

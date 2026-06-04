@@ -11,8 +11,11 @@ from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFontComboBox,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -48,6 +51,7 @@ from .network import (
     workbook_to_payload,
 )
 from .qt_model import WorksheetTableModel
+from .settings import StartupSettings, load_startup_settings, save_startup_settings
 from .workbook import WorkbookData, WorksheetData
 
 FORMULA_LIBRARY = {
@@ -167,11 +171,13 @@ class SpreadsheetWindow(QMainWindow):
         self.collaboration_status = "Offline"
         self.collaboration_clients = 0
         self.applying_remote_update = False
+        self.startup_settings = load_startup_settings()
         self.setWindowTitle("PyExcel Lite")
         self.resize(1280, 760)
         self._build_actions()
         self._build_ui()
         self.load_workbook(self.workbook)
+        self.apply_startup_settings()
 
     @property
     def current_view(self) -> SpreadsheetView:
@@ -206,6 +212,7 @@ class SpreadsheetWindow(QMainWindow):
         self.join_network_action = QAction("Join", self, triggered=self.join_collaboration)
         self.leave_network_action = QAction("Leave", self, triggered=self.leave_collaboration)
         self.leave_network_action.setEnabled(False)
+        self.startup_network_action = QAction("Startup", self, triggered=self.open_startup_settings)
         self.zoom_in_action = QAction("Zoom In", self, triggered=self.zoom_in)
         self.zoom_in_action.setShortcuts([QKeySequence("Ctrl++"), QKeySequence("Ctrl+=")])
         self.zoom_out_action = QAction("Zoom Out", self, shortcut=QKeySequence("Ctrl+-"), triggered=self.zoom_out)
@@ -234,6 +241,7 @@ class SpreadsheetWindow(QMainWindow):
             self.host_network_action: ("network_host", "Host a realtime collaboration session"),
             self.join_network_action: ("network_join", "Join a realtime collaboration session"),
             self.leave_network_action: ("network_leave", "Leave the collaboration session"),
+            self.startup_network_action: ("settings", "Choose automatic network startup mode"),
             self.zoom_in_action: ("zoom_in", "Zoom in"),
             self.zoom_out_action: ("zoom_out", "Zoom out"),
             self.zoom_reset_action: ("zoom_reset", "Reset zoom"),
@@ -282,6 +290,8 @@ class SpreadsheetWindow(QMainWindow):
         insert_menu.addAction(self.chart_action)
         network_menu = self.menuBar().addMenu("Network")
         network_menu.addActions([self.host_network_action, self.join_network_action, self.leave_network_action])
+        network_menu.addSeparator()
+        network_menu.addAction(self.startup_network_action)
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction(self.about_action)
 
@@ -468,6 +478,8 @@ class SpreadsheetWindow(QMainWindow):
         session = self._ribbon_group(layout, "Session")
         for action in (self.host_network_action, self.join_network_action, self.leave_network_action):
             session.addWidget(self._ribbon_action_button(action))
+        startup = self._ribbon_group(layout, "Startup")
+        startup.addWidget(self._ribbon_action_button(self.startup_network_action))
         layout.addStretch(1)
         return page
 
@@ -732,7 +744,7 @@ class SpreadsheetWindow(QMainWindow):
         network_buttons = QHBoxLayout()
         network_buttons.setContentsMargins(0, 0, 0, 0)
         network_buttons.setSpacing(6)
-        for action in (self.host_network_action, self.join_network_action, self.leave_network_action):
+        for action in (self.host_network_action, self.join_network_action, self.leave_network_action, self.startup_network_action):
             network_buttons.addWidget(self._sidebar_action_button(action))
         network_layout.addWidget(self.network_status_label)
         network_layout.addLayout(network_buttons)
@@ -1030,12 +1042,89 @@ class SpreadsheetWindow(QMainWindow):
             return
         self.send_collaboration_message({"type": "snapshot", "workbook": workbook_to_payload(self.workbook)})
 
-    def host_collaboration(self) -> None:
+    def apply_startup_settings(self, *, restart: bool = False) -> None:
+        settings = self.startup_settings.normalized()
+        self.startup_settings = settings
+        if settings.startup_mode == "manual":
+            if restart and self.collaboration is not None:
+                self.leave_collaboration()
+            return
         if self.collaboration is not None:
+            if not restart:
+                return
             self.leave_collaboration()
+        if settings.startup_mode == "local_server":
+            self.start_host_collaboration(settings.local_server_port, notify_user=False)
+        elif settings.startup_mode == "shared_client":
+            self.start_client_collaboration(settings.shared_server_host, settings.shared_server_port)
+
+    def open_startup_settings(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Network startup settings")
+        layout = QFormLayout(dialog)
+
+        mode_box = QComboBox()
+        mode_items = [
+            ("Manual network controls", "manual"),
+            ("Connect to shared server", "shared_client"),
+            ("Run this program as server", "local_server"),
+        ]
+        for label, value in mode_items:
+            mode_box.addItem(label, value)
+        current_mode = self.startup_settings.normalized().startup_mode
+        mode_index = mode_box.findData(current_mode)
+        mode_box.setCurrentIndex(max(0, mode_index))
+
+        host_input = QLineEdit(self.startup_settings.shared_server_host)
+        shared_port_box = QSpinBox()
+        shared_port_box.setRange(1, 65535)
+        shared_port_box.setValue(self.startup_settings.shared_server_port)
+        local_port_box = QSpinBox()
+        local_port_box.setRange(1, 65535)
+        local_port_box.setValue(self.startup_settings.local_server_port)
+
+        def update_fields() -> None:
+            mode = mode_box.currentData()
+            host_input.setEnabled(mode == "shared_client")
+            shared_port_box.setEnabled(mode == "shared_client")
+            local_port_box.setEnabled(mode == "local_server")
+
+        mode_box.currentIndexChanged.connect(update_fields)
+        update_fields()
+
+        layout.addRow("Startup mode", mode_box)
+        layout.addRow("Shared server IP", host_input)
+        layout.addRow("Shared server port", shared_port_box)
+        layout.addRow("Local server port", local_port_box)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.startup_settings = StartupSettings(
+            startup_mode=str(mode_box.currentData()),
+            shared_server_host=host_input.text(),
+            shared_server_port=shared_port_box.value(),
+            local_server_port=local_port_box.value(),
+        ).normalized()
+        save_startup_settings(self.startup_settings)
+        self.statusBar().showMessage("Network startup settings saved")
+        self.apply_startup_settings(restart=True)
+
+    def host_collaboration(self) -> None:
         port, ok = QInputDialog.getInt(self, "Host collaboration", "Port", DEFAULT_PORT, 1, 65535)
         if not ok:
             return
+        self.start_host_collaboration(port)
+
+    def start_host_collaboration(self, port: int, *, notify_user: bool = True) -> bool:
+        if self.collaboration is not None:
+            self.leave_collaboration()
         server = CollaborationServer(port=port, snapshot_provider=lambda: workbook_to_payload(self.workbook))
         self.attach_collaboration(server, "Host")
         try:
@@ -1043,11 +1132,14 @@ class SpreadsheetWindow(QMainWindow):
         except OSError as exc:
             server.stop()
             self.detach_collaboration()
-            QMessageBox.critical(self, "Network failed", str(exc))
+            if notify_user:
+                QMessageBox.critical(self, "Network failed", str(exc))
+            else:
+                self.show_collaboration_error(f"Server startup failed: {exc}")
+            return False
+        return True
 
     def join_collaboration(self) -> None:
-        if self.collaboration is not None:
-            self.leave_collaboration()
         target, ok = QInputDialog.getText(self, "Join collaboration", "Server IP:port", text=f"127.0.0.1:{DEFAULT_PORT}")
         if not ok or not target.strip():
             return
@@ -1056,9 +1148,15 @@ class SpreadsheetWindow(QMainWindow):
         except ValueError as exc:
             QMessageBox.warning(self, "Join collaboration", str(exc))
             return
+        self.start_client_collaboration(host, port)
+
+    def start_client_collaboration(self, host: str, port: int) -> bool:
+        if self.collaboration is not None:
+            self.leave_collaboration()
         client = CollaborationClient(host, port)
         self.attach_collaboration(client, "Client")
         client.start()
+        return True
 
     def leave_collaboration(self) -> None:
         if self.collaboration is None:
