@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QItemSelection, QModelIndex, Qt
+from PySide6.QtCore import QItemSelection, QModelIndex, QSize, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from .cell_address import index_to_column_name
 from .formula import FormulaEvaluator, to_number
+from .icons import app_icon
 from .io_xlsx import export_csv, load_xlsx, save_xlsx
 from .qt_model import WorksheetTableModel
 from .workbook import WorkbookData, WorksheetData
@@ -150,10 +151,36 @@ class SpreadsheetWindow(QMainWindow):
         self.zoom_out_action = QAction("Zoom Out", self, shortcut=QKeySequence("Ctrl+-"), triggered=self.zoom_out)
         self.zoom_reset_action = QAction("Reset Zoom", self, shortcut=QKeySequence("Ctrl+0"), triggered=self.reset_zoom)
         self.about_action = QAction("About", self, triggered=self.about)
+        self._decorate_actions()
+
+    def _decorate_actions(self) -> None:
+        action_icons = {
+            self.new_action: ("new", "Create a new workbook"),
+            self.open_action: ("open", "Open an Excel workbook"),
+            self.save_action: ("save", "Save the current workbook"),
+            self.save_as_action: ("save_as", "Save this workbook with a new name"),
+            self.export_csv_action: ("csv", "Export the active sheet as CSV"),
+            self.add_sheet_action: ("sheet_add", "Add a new worksheet"),
+            self.rename_sheet_action: ("sheet_rename", "Rename the active worksheet"),
+            self.delete_sheet_action: ("sheet_delete", "Delete the active worksheet"),
+            self.insert_row_action: ("row_insert", "Insert a row above the current row"),
+            self.delete_row_action: ("row_delete", "Delete the current row"),
+            self.insert_column_action: ("column_insert", "Insert a column before the current column"),
+            self.delete_column_action: ("column_delete", "Delete the current column"),
+            self.clear_action: ("clear", "Clear selected cells"),
+            self.zoom_in_action: ("zoom_in", "Zoom in"),
+            self.zoom_out_action: ("zoom_out", "Zoom out"),
+            self.zoom_reset_action: ("zoom_reset", "Reset zoom"),
+        }
+        for action, (icon_name, tooltip) in action_icons.items():
+            action.setIcon(app_icon(icon_name))
+            action.setToolTip(tooltip)
+            action.setStatusTip(tooltip)
 
     def _build_ui(self) -> None:
         self._build_menu()
         self._build_toolbars()
+        self._apply_ribbon_style()
 
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(False)
@@ -185,8 +212,9 @@ class SpreadsheetWindow(QMainWindow):
 
     def _build_toolbars(self) -> None:
         file_bar = QToolBar("File")
+        self._configure_ribbon_toolbar(file_bar)
         self.addToolBar(file_bar)
-        file_bar.addActions([self.new_action, self.open_action, self.save_action])
+        file_bar.addActions([self.new_action, self.open_action, self.save_action, self.save_as_action])
         file_bar.addSeparator()
         file_bar.addActions([self.add_sheet_action, self.export_csv_action])
         file_bar.addSeparator()
@@ -201,6 +229,7 @@ class SpreadsheetWindow(QMainWindow):
         file_bar.addWidget(self.zoom_box)
 
         formula_bar = QToolBar("Formula")
+        self._configure_ribbon_toolbar(formula_bar, text_under_icon=False)
         self.addToolBarBreak()
         self.addToolBar(formula_bar)
         self.name_box = QLineEdit()
@@ -209,12 +238,17 @@ class SpreadsheetWindow(QMainWindow):
         self.formula_input = QLineEdit()
         self.formula_input.setPlaceholderText("Type a value or formula, for example =SUM(A1:A5)")
         self.formula_input.returnPressed.connect(self.commit_formula_bar)
+        formula_icon = QToolButton()
+        formula_icon.setIcon(app_icon("formula"))
+        formula_icon.setAutoRaise(True)
+        formula_icon.setToolTip("Formula bar")
         formula_bar.addWidget(QLabel("Cell"))
         formula_bar.addWidget(self.name_box)
-        formula_bar.addWidget(QLabel("fx"))
+        formula_bar.addWidget(formula_icon)
         formula_bar.addWidget(self.formula_input)
 
         format_bar = QToolBar("Format")
+        self._configure_ribbon_toolbar(format_bar)
         self.addToolBarBreak()
         self.addToolBar(format_bar)
         self.font_box = QFontComboBox()
@@ -223,9 +257,9 @@ class SpreadsheetWindow(QMainWindow):
         self.size_box.setRange(6, 48)
         self.size_box.setValue(10)
         self.size_box.valueChanged.connect(lambda value: self.apply_style(font_size=value))
-        self.bold_button = self._format_button("B", "Bold", lambda checked: self.apply_style(bold=checked))
-        self.italic_button = self._format_button("I", "Italic", lambda checked: self.apply_style(italic=checked))
-        self.underline_button = self._format_button("U", "Underline", lambda checked: self.apply_style(underline=checked))
+        self.bold_button = self._format_button("B", "bold", "Bold", lambda checked: self.apply_style(bold=checked))
+        self.italic_button = self._format_button("I", "italic", "Italic", lambda checked: self.apply_style(italic=checked))
+        self.underline_button = self._format_button("U", "underline", "Underline", lambda checked: self.apply_style(underline=checked))
         self.align_box = QComboBox()
         self.align_box.addItems(["general", "left", "center", "right"])
         self.align_box.currentTextChanged.connect(lambda value: self.apply_style(horizontal=value))
@@ -234,18 +268,88 @@ class SpreadsheetWindow(QMainWindow):
         self.number_format_box.currentTextChanged.connect(lambda value: self.apply_style(number_format=value))
         self.text_color_button = QToolButton()
         self.text_color_button.setText("Text")
+        self.text_color_button.setIcon(app_icon("text_color"))
+        self.text_color_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.text_color_button.setToolTip("Text color")
+        self.text_color_button.setAutoRaise(True)
         self.text_color_button.clicked.connect(lambda: self.pick_color("text_color"))
         self.fill_color_button = QToolButton()
         self.fill_color_button.setText("Fill")
+        self.fill_color_button.setIcon(app_icon("fill_color"))
+        self.fill_color_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.fill_color_button.setToolTip("Fill color")
+        self.fill_color_button.setAutoRaise(True)
         self.fill_color_button.clicked.connect(lambda: self.pick_color("fill_color"))
         for widget in [self.font_box, self.size_box, self.bold_button, self.italic_button, self.underline_button, QLabel("Align"), self.align_box, QLabel("Format"), self.number_format_box, self.text_color_button, self.fill_color_button]:
             format_bar.addWidget(widget)
+        format_bar.addSeparator()
+        format_bar.addActions([self.insert_row_action, self.delete_row_action, self.insert_column_action, self.delete_column_action, self.clear_action])
 
-    def _format_button(self, text: str, tooltip: str, callback) -> QToolButton:
+    def _configure_ribbon_toolbar(self, toolbar: QToolBar, text_under_icon: bool = True) -> None:
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setIconSize(QSize(24, 24))
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon if text_under_icon else Qt.ToolButtonIconOnly)
+        toolbar.setAllowedAreas(Qt.TopToolBarArea)
+
+    def _apply_ribbon_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QToolBar {
+                background: #f8fafc;
+                border: 0;
+                border-bottom: 1px solid #d0d7de;
+                spacing: 5px;
+                padding: 5px 7px;
+            }
+            QToolBar::separator {
+                background: #d8dee4;
+                width: 1px;
+                margin: 5px 7px;
+            }
+            QToolBar QToolButton {
+                border: 1px solid transparent;
+                border-radius: 7px;
+                color: #1f2937;
+                min-width: 48px;
+                padding: 4px 6px;
+            }
+            QToolBar QToolButton:hover {
+                background: #eef7f1;
+                border-color: #a8d5ba;
+            }
+            QToolBar QToolButton:pressed,
+            QToolBar QToolButton:checked {
+                background: #dff3e8;
+                border-color: #107c41;
+            }
+            QToolBar QComboBox,
+            QToolBar QSpinBox,
+            QToolBar QLineEdit,
+            QToolBar QFontComboBox {
+                border: 1px solid #cfd7df;
+                border-radius: 6px;
+                padding: 4px 7px;
+                background: #ffffff;
+            }
+            QMenuBar {
+                background: #ffffff;
+                border-bottom: 1px solid #e5e7eb;
+            }
+            QStatusBar {
+                background: #f8fafc;
+            }
+            """
+        )
+
+    def _format_button(self, text: str, icon_name: str, tooltip: str, callback) -> QToolButton:
         button = QToolButton()
         button.setText(text)
+        button.setIcon(app_icon(icon_name))
+        button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
         button.setCheckable(True)
         button.setToolTip(tooltip)
+        button.setAutoRaise(True)
         button.toggled.connect(callback)
         return button
 
