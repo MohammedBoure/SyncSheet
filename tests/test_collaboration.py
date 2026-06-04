@@ -130,6 +130,13 @@ class CollaborationTest(unittest.TestCase):
             client_window.attach_collaboration(client, "Client")
             client.start()
 
+            self.wait_until(lambda: client._connection is not None and bool(server._clients))
+            self.assertIsNone(client._connection.sock.gettimeout())
+            with server._clients_lock:
+                server_connections = list(server._clients)
+            self.assertTrue(server_connections)
+            self.assertTrue(all(connection.sock.gettimeout() is None for connection in server_connections))
+
             self.wait_until(lambda: client_window.current_sheet.raw_value(0, 0) == "initial")
 
             server_window.current_model.setData(server_window.current_model.index(0, 0), "from-server", Qt.EditRole)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 from dataclasses import asdict
 from typing import Callable
 
@@ -14,7 +15,15 @@ from .workbook import CellData, CellStyle, WorkbookData, WorksheetData
 
 DEFAULT_PORT = 8765
 PROTOCOL_VERSION = 1
+RECONNECT_DELAY_SECONDS = 1.5
 STYLE_FIELDS = set(CellStyle.__dataclass_fields__)
+
+
+def configure_collaboration_socket(sock: socket.socket) -> None:
+    sock.settimeout(None)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    if hasattr(socket, "TCP_NODELAY"):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 
 def local_ipv4_addresses() -> list[str]:
@@ -242,6 +251,7 @@ class CollaborationServer(CollaborationEndpoint):
                 continue
             except OSError:
                 break
+            configure_collaboration_socket(sock)
             client = _JsonConnection(sock, f"{address[0]}:{address[1]}")
             with self._clients_lock:
                 self._clients.append(client)
@@ -321,29 +331,50 @@ class CollaborationClient(CollaborationEndpoint):
         self.status_changed.emit("Offline")
 
     def _run(self) -> None:
-        try:
-            sock = socket.create_connection((self.host, self.port), timeout=5)
-            self._connection = _JsonConnection(sock, f"{self.host}:{self.port}")
-            self.status_changed.emit(f"Connected to {self.host}:{self.port}")
-            for message in _iter_json_messages(sock):
-                self.message_received.emit(message)
-                if not self._running:
-                    break
-        except OSError as exc:
+        while self._running:
+            try:
+                sock = socket.create_connection((self.host, self.port), timeout=5)
+                configure_collaboration_socket(sock)
+                connection = _JsonConnection(sock, f"{self.host}:{self.port}")
+                self._connection = connection
+                self.status_changed.emit(f"Connected to {self.host}:{self.port}")
+                for message in _iter_json_messages(sock):
+                    self.message_received.emit(message)
+                    if not self._running:
+                        break
+                if self._running:
+                    self.status_changed.emit(f"Disconnected. Reconnecting to {self.host}:{self.port}")
+            except OSError as exc:
+                if self._running:
+                    self.error_occurred.emit(f"Connection failed: {exc}")
+            finally:
+                if self._connection is not None:
+                    self._connection.close()
+                    self._connection = None
             if self._running:
-                self.error_occurred.emit(f"Connection failed: {exc}")
-        finally:
-            self.stop()
+                self._wait_before_reconnect()
+        self.status_changed.emit("Offline")
+
+    def _wait_before_reconnect(self) -> None:
+        deadline = time.monotonic() + RECONNECT_DELAY_SECONDS
+        while self._running and time.monotonic() < deadline:
+            time.sleep(0.05)
 
 
 def _iter_json_messages(sock: socket.socket):
     buffer = ""
     while True:
-        data = sock.recv(65536)
+        try:
+            data = sock.recv(65536)
+        except socket.timeout:
+            continue
         if not data:
             break
         buffer += data.decode("utf-8")
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             if line.strip():
-                yield json.loads(line)
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
