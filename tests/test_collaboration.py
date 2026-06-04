@@ -75,6 +75,20 @@ class CollaborationTest(unittest.TestCase):
         finally:
             window.close()
 
+    def test_project_cell_edit_sends_workbook_id(self):
+        window = SpreadsheetWindow()
+        endpoint = RecordingEndpoint()
+        try:
+            window.collaboration = endpoint
+            window.active_workbook_id = "reports/budget.xlsx"
+
+            window.current_model.setData(window.current_model.index(0, 0), "42", Qt.EditRole)
+
+            self.assertEqual(endpoint.sent[0]["type"], "cell_update")
+            self.assertEqual(endpoint.sent[0]["workbook_id"], "reports/budget.xlsx")
+        finally:
+            window.close()
+
     def test_remote_cell_update_applies_without_undo_or_echo(self):
         window = SpreadsheetWindow()
         endpoint = RecordingEndpoint()
@@ -88,6 +102,32 @@ class CollaborationTest(unittest.TestCase):
             self.assertEqual(window.current_model.data(window.current_model.index(0, 1), Qt.DisplayRole), "198")
             self.assertFalse(window.current_model.can_undo())
             self.assertEqual(endpoint.sent, [])
+        finally:
+            window.close()
+
+    def test_remote_project_file_update_is_cached_without_switching_active_workbook(self):
+        window = SpreadsheetWindow()
+        try:
+            window.active_workbook_id = "reports/current.xlsx"
+            window.cache_active_workbook()
+            message = cell_update_message(
+                0,
+                "Sheet1",
+                [(0, 0, "background")],
+                workbook_id="reports/other.xlsx",
+            )
+
+            window.on_collaboration_message(message)
+
+            self.assertEqual(window.current_sheet.raw_value(0, 0), "")
+            self.assertIn("reports/other.xlsx", window.project_workbooks)
+            self.assertEqual(
+                window.project_workbooks["reports/other.xlsx"].sheets[0].raw_value(0, 0),
+                "background",
+            )
+
+            window.load_workbook(window.project_workbooks["reports/other.xlsx"], workbook_id="reports/other.xlsx")
+            self.assertEqual(window.current_sheet.raw_value(0, 0), "background")
         finally:
             window.close()
 

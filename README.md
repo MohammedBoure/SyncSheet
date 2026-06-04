@@ -14,6 +14,7 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 - Undo and redo for cell edits, paste operations, clears, and generated formulas.
 - Bar, line, and pie charts from the selected cells, with full-screen dialog viewing.
 - Realtime LAN collaboration with Host, Join, and Leave controls so multiple users can edit the same workbook together.
+- Project-level collaboration keeps each project workbook separate, so users can work in different files while edits sync in the background.
 - Network startup settings that can launch the app in manual mode, connect directly to a shared server, or make the current program host a server automatically.
 - Join and Host dialogs can save automatic network startup, so the next launch connects or hosts immediately.
 - Standalone shared-workbook and project server for LAN client/server use, with JSON state persistence.
@@ -57,7 +58,7 @@ On the server computer, choose `Network > Host` and keep the selected port, usua
 The Network panel shows the local address clients should use, for example `192.168.1.20:8765`.
 On each client computer on the same LAN, choose `Network > Join` and enter that server address.
 
-The host sends the current workbook as a snapshot when a user joins, then all users receive live TCP socket updates for cell edits, pasted ranges, sheet changes, and row or column structure changes.
+The host sends the current workbook and any synchronized project workbooks as snapshots when a user joins, then all users receive live TCP socket updates for cell edits, pasted ranges, sheet changes, and row or column structure changes.
 Connected sockets use TCP keepalive, blocking reads after the initial connect timeout, app-level ping/pong heartbeats, and automatic client retry when the server connection drops.
 
 Use `Network > Startup` to choose what happens when the program opens:
@@ -83,7 +84,8 @@ Use `Project > Open Project` to choose a parent folder. The program scans nested
 XLSX and CSV files can be opened directly from the project tree; opening a project spreadsheet sends a full workbook snapshot to connected teammates.
 
 Use `Project > Share Project` while connected to a host or shared server to synchronize the project structure with the team.
-The shared server stores both the active workbook and the latest project snapshot, so new clients receive the same workspace context when they join.
+Each openable project file is tracked by its relative path. If one user edits `reports/budget.xlsx` while another user is viewing a different file, the update is cached in the background and appears when that second user opens `reports/budget.xlsx`.
+The shared server stores the active workbook, synchronized project workbooks, and the latest project snapshot, so new clients receive the same workspace context when they join.
 
 ## Test
 

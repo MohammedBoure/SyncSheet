@@ -22,6 +22,17 @@ PING_MESSAGE = {"type": "ping"}
 PONG_MESSAGE = {"type": "pong"}
 
 
+def normalize_workbook_id(workbook_id: object) -> str:
+    return str(workbook_id or "").replace("\\", "/").strip("/")
+
+
+def add_workbook_id(message: dict, workbook_id: object = "") -> dict:
+    normalized = normalize_workbook_id(workbook_id)
+    if normalized:
+        message["workbook_id"] = normalized
+    return message
+
+
 def configure_collaboration_socket(sock: socket.socket) -> None:
     sock.settimeout(None)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
@@ -126,30 +137,48 @@ def json_safe_value(value):
     return str(value)
 
 
-def cell_update_message(sheet_index: int, sheet_name: str, values: list[tuple[int, int, object]]) -> dict:
-    return {
-        "type": "cell_update",
-        "sheet_index": sheet_index,
-        "sheet_name": sheet_name,
-        "values": [
-            {"row": row, "column": column, "value": json_safe_value(value)}
-            for row, column, value in values
-        ],
-    }
+def cell_update_message(
+    sheet_index: int,
+    sheet_name: str,
+    values: list[tuple[int, int, object]],
+    workbook_id: object = "",
+) -> dict:
+    return add_workbook_id(
+        {
+            "type": "cell_update",
+            "sheet_index": sheet_index,
+            "sheet_name": sheet_name,
+            "values": [
+                {"row": row, "column": column, "value": json_safe_value(value)}
+                for row, column, value in values
+            ],
+        },
+        workbook_id,
+    )
 
 
-def sheet_message(message_type: str, sheet_index: int, sheet_name: str = "") -> dict:
-    return {"type": message_type, "sheet_index": sheet_index, "sheet_name": sheet_name}
+def sheet_message(message_type: str, sheet_index: int, sheet_name: str = "", workbook_id: object = "") -> dict:
+    return add_workbook_id({"type": message_type, "sheet_index": sheet_index, "sheet_name": sheet_name}, workbook_id)
 
 
-def structure_message(message_type: str, sheet_index: int, sheet_name: str, start: int, count: int = 1) -> dict:
-    return {
-        "type": message_type,
-        "sheet_index": sheet_index,
-        "sheet_name": sheet_name,
-        "start": start,
-        "count": count,
-    }
+def structure_message(
+    message_type: str,
+    sheet_index: int,
+    sheet_name: str,
+    start: int,
+    count: int = 1,
+    workbook_id: object = "",
+) -> dict:
+    return add_workbook_id(
+        {
+            "type": message_type,
+            "sheet_index": sheet_index,
+            "sheet_name": sheet_name,
+            "start": start,
+            "count": count,
+        },
+        workbook_id,
+    )
 
 
 class _JsonConnection:

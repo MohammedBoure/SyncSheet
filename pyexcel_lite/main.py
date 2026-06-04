@@ -52,6 +52,7 @@ from .network import (
     CollaborationServer,
     cell_update_message,
     local_join_addresses,
+    normalize_workbook_id,
     sheet_message,
     structure_message,
     workbook_from_payload,
@@ -59,8 +60,8 @@ from .network import (
 )
 from .project import (
     ProjectData,
+    normalize_relative_path,
     project_from_payload,
-    project_snapshot_message,
     project_to_payload,
     scan_project_folder,
 )
@@ -238,6 +239,8 @@ class SpreadsheetWindow(QMainWindow):
         self.workbook = WorkbookData()
         self.evaluator = FormulaEvaluator(self.workbook)
         self.project = ProjectData()
+        self.project_workbooks: dict[str, WorkbookData] = {}
+        self.active_workbook_id = ""
         self.models: list[WorksheetTableModel] = []
         self.current_path: Path | None = None
         self.zoom_percent = 100
@@ -850,10 +853,19 @@ class SpreadsheetWindow(QMainWindow):
 
     def load_project(self, path: Path) -> None:
         try:
-            self.project = scan_project_folder(path)
+            project = scan_project_folder(path)
         except OSError as exc:
             QMessageBox.critical(self, "Open project failed", str(exc))
             return
+        previous_workbooks = self.project_workbooks if self.project.remote and self.project.name == project.name else {}
+        self.project = project
+        self.project_workbooks = {
+            workbook_id: self.prepare_project_workbook(workbook_id, workbook)
+            for workbook_id, workbook in previous_workbooks.items()
+            if self.project.file_by_relative_path(workbook_id) is not None
+        }
+        self.active_workbook_id = self.workbook_id_for_path(self.current_path)
+        self.cache_active_workbook()
         self.update_project_panel()
         self.statusBar().showMessage(f"Project opened: {self.project.name}")
 
@@ -866,6 +878,8 @@ class SpreadsheetWindow(QMainWindow):
 
     def close_project(self) -> None:
         self.project = ProjectData()
+        self.project_workbooks.clear()
+        self.active_workbook_id = ""
         self.update_project_panel()
         self.send_project_snapshot()
         self.statusBar().showMessage("Project closed")
@@ -873,7 +887,7 @@ class SpreadsheetWindow(QMainWindow):
     def send_project_snapshot(self) -> None:
         if self.applying_remote_update or self.collaboration is None or not self.collaboration.running:
             return
-        self.send_collaboration_message(project_snapshot_message(self.project))
+        self.send_collaboration_message(self.build_project_snapshot_message())
 
     def update_project_panel(self) -> None:
         if not hasattr(self, "project_tree"):
@@ -945,13 +959,22 @@ class SpreadsheetWindow(QMainWindow):
         if not project_file.openable:
             self.statusBar().showMessage("Only XLSX and CSV project files can be opened in the spreadsheet")
             return
+        workbook_id = normalize_workbook_id(project_file.relative_path)
+        if workbook_id in self.project_workbooks:
+            self.load_workbook(self.project_workbooks[workbook_id], workbook_id=workbook_id)
+            self.statusBar().showMessage(f"Opened synchronized project file: {project_file.relative_path}")
+            return
         path = self.project.absolute_path_for(project_file)
         if path is None:
-            QMessageBox.information(self, "Project file", "This project snapshot came from the team server. Open the matching local project folder to load files from disk.")
+            QMessageBox.information(
+                self,
+                "Project file",
+                "This project file is known from the team server, but no synchronized workbook data has arrived yet.",
+            )
             return
         try:
             workbook = load_xlsx(path) if project_file.extension == ".xlsx" else load_csv(path)
-            self.load_workbook(workbook)
+            self.load_workbook(workbook, workbook_id=workbook_id)
             self.send_collaboration_snapshot()
             self.statusBar().showMessage(f"Opened project file: {project_file.relative_path}")
         except Exception as exc:
@@ -1191,7 +1214,7 @@ class SpreadsheetWindow(QMainWindow):
             sheet_index = self.workbook.sheets.index(sheet)
         except ValueError:
             return
-        self.send_collaboration_message(cell_update_message(sheet_index, sheet.name, values))
+        self.send_collaboration_message(cell_update_message(sheet_index, sheet.name, values, self.active_workbook_id))
 
     def refresh_workbook_formulas(self) -> None:
         for model in self.models:
@@ -1211,11 +1234,62 @@ class SpreadsheetWindow(QMainWindow):
         self.send_collaboration_message(self.build_collaboration_snapshot_message())
 
     def build_collaboration_snapshot_message(self) -> dict:
-        return {
+        message = {
             "type": "snapshot",
             "workbook": workbook_to_payload(self.workbook),
             "project": project_to_payload(self.project),
         }
+        workbook_id = self.active_workbook_id
+        if workbook_id:
+            message["workbook_id"] = workbook_id
+        workbooks = self.project_workbooks_payload()
+        if workbooks:
+            message["workbooks"] = workbooks
+        return message
+
+    def build_project_snapshot_message(self) -> dict:
+        message = {
+            "type": "project_snapshot",
+            "project": project_to_payload(self.project),
+        }
+        workbooks = self.project_workbooks_payload()
+        if workbooks:
+            message["workbooks"] = workbooks
+        return message
+
+    def project_workbooks_payload(self) -> dict:
+        self.cache_active_workbook()
+        return {
+            workbook_id: workbook_to_payload(workbook)
+            for workbook_id, workbook in sorted(self.project_workbooks.items())
+        }
+
+    def cache_active_workbook(self) -> None:
+        if getattr(self, "active_workbook_id", ""):
+            self.project_workbooks[self.active_workbook_id] = self.workbook
+
+    def workbook_id_for_path(self, path: Path | None) -> str:
+        if path is None or not self.project.root_path or self.project.remote:
+            return ""
+        try:
+            relative_path = Path(path).resolve().relative_to(Path(self.project.root_path).resolve())
+        except (OSError, ValueError):
+            return ""
+        workbook_id = normalize_relative_path(relative_path)
+        project_file = self.project.file_by_relative_path(workbook_id)
+        return workbook_id if project_file is not None and project_file.openable else ""
+
+    def project_path_for_workbook_id(self, workbook_id: str) -> Path | None:
+        project_file = self.project.file_by_relative_path(workbook_id)
+        if project_file is None:
+            return None
+        return self.project.absolute_path_for(project_file)
+
+    def prepare_project_workbook(self, workbook_id: str, workbook: WorkbookData) -> WorkbookData:
+        path = self.project_path_for_workbook_id(workbook_id)
+        if path is not None:
+            workbook.path = str(path)
+        return workbook
 
     def apply_startup_settings(self, *, restart: bool = False) -> None:
         settings = self.startup_settings.normalized()
@@ -1517,23 +1591,120 @@ class SpreadsheetWindow(QMainWindow):
 
     def apply_remote_snapshot(self, message: dict) -> None:
         payload = message.get("workbook", {})
+        workbook_id = self.message_workbook_id(message)
+        show_workbook = (
+            not workbook_id
+            or workbook_id == self.active_workbook_id
+            or (not self.active_workbook_id and self.current_path is None and self.is_default_blank_workbook())
+        )
         self.applying_remote_update = True
         try:
-            self.load_workbook(workbook_from_payload(payload))
             if "project" in message:
                 self.apply_remote_project_snapshot(message)
+            self.apply_remote_project_workbooks(message.get("workbooks"))
+            if isinstance(payload, dict):
+                workbook = workbook_from_payload(payload)
+                if workbook_id:
+                    self.project_workbooks[workbook_id] = self.prepare_project_workbook(workbook_id, workbook)
+                if show_workbook:
+                    self.load_workbook(workbook, workbook_id=workbook_id or None)
         finally:
             self.applying_remote_update = False
         self.update_formula_bar()
         self.update_selection_stats()
-        self.statusBar().showMessage("Workbook synchronized")
+        if show_workbook:
+            self.statusBar().showMessage("Workbook synchronized")
+        elif workbook_id:
+            self.statusBar().showMessage(f"Synchronized in background: {workbook_id}")
 
     def apply_remote_project_snapshot(self, message: dict) -> None:
-        self.project = project_from_payload(message.get("project"), remote=True)
+        local_root = self.project.root_path if self.project.root_path and not self.project.remote else None
+        local_name = self.project.name
+        incoming = project_from_payload(message.get("project"), remote=True)
+        if local_root and incoming.name == local_name:
+            incoming.root_path = local_root
+            incoming.remote = False
+        self.project = incoming
+        self.apply_remote_project_workbooks(message.get("workbooks"))
         self.update_project_panel()
         self.statusBar().showMessage("Project synchronized")
 
+    def apply_remote_project_workbooks(self, payload) -> None:
+        if not isinstance(payload, dict):
+            return
+        for raw_workbook_id, workbook_payload in payload.items():
+            workbook_id = normalize_workbook_id(raw_workbook_id)
+            if not workbook_id or not isinstance(workbook_payload, dict):
+                continue
+            workbook = workbook_from_payload(workbook_payload)
+            self.project_workbooks[workbook_id] = self.prepare_project_workbook(workbook_id, workbook)
+
+    def message_workbook_id(self, message: dict) -> str:
+        return normalize_workbook_id(message.get("workbook_id"))
+
+    def message_targets_active_workbook(self, message: dict) -> bool:
+        workbook_id = self.message_workbook_id(message)
+        return not workbook_id or workbook_id == self.active_workbook_id
+
+    def remote_workbook_for_message(self, message: dict, *, create: bool = False) -> WorkbookData | None:
+        workbook_id = self.message_workbook_id(message)
+        if not workbook_id or workbook_id == self.active_workbook_id:
+            return self.workbook
+        workbook = self.project_workbooks.get(workbook_id)
+        if workbook is None and create:
+            workbook = self.prepare_project_workbook(workbook_id, WorkbookData())
+            self.project_workbooks[workbook_id] = workbook
+        return workbook
+
+    def remote_sheet_for_workbook(
+        self,
+        workbook: WorkbookData,
+        message: dict,
+        *,
+        create: bool = False,
+    ) -> WorksheetData | None:
+        raw_index = message.get("sheet_index", -1)
+        try:
+            sheet_index = int(raw_index)
+        except (TypeError, ValueError):
+            sheet_index = -1
+        if 0 <= sheet_index < len(workbook.sheets):
+            return workbook.sheets[sheet_index]
+        sheet_name = str(message.get("sheet_name") or "")
+        sheet = workbook.sheet_by_name(sheet_name) if sheet_name else None
+        if sheet is not None:
+            return sheet
+        if not create:
+            return None
+        sheet = WorksheetData(name=sheet_name or workbook.unique_sheet_name())
+        index = max(0, min(sheet_index if sheet_index >= 0 else len(workbook.sheets), len(workbook.sheets)))
+        workbook.sheets.insert(index, sheet)
+        return sheet
+
+    def is_default_blank_workbook(self) -> bool:
+        return (
+            len(self.workbook.sheets) == 1
+            and self.workbook.sheets[0].name == "Sheet1"
+            and not self.workbook.sheets[0].cells
+        )
+
     def apply_remote_cell_update(self, message: dict) -> None:
+        if not self.message_targets_active_workbook(message):
+            workbook = self.remote_workbook_for_message(message, create=True)
+            if workbook is None:
+                return
+            sheet = self.remote_sheet_for_workbook(workbook, message, create=True)
+            if sheet is None:
+                return
+            changed = False
+            for item in message.get("values", []):
+                row = int(item.get("row", 0) or 0)
+                column = int(item.get("column", 0) or 0)
+                changed = sheet.set_value(row, column, item.get("value", ""), touch=False) or changed
+            if changed:
+                sheet.bump_revision()
+            self.statusBar().showMessage(f"Background update: {self.message_workbook_id(message)}")
+            return
         model = self.remote_model(message, create=True)
         if model is None:
             return
@@ -1553,6 +1724,17 @@ class SpreadsheetWindow(QMainWindow):
         self.statusBar().showMessage(f"Remote update: {model.sheet.name}")
 
     def apply_remote_sheet_add(self, message: dict) -> None:
+        if not self.message_targets_active_workbook(message):
+            workbook = self.remote_workbook_for_message(message, create=True)
+            if workbook is None:
+                return
+            name = str(message.get("sheet_name") or workbook.unique_sheet_name())
+            if workbook.sheet_by_name(name) is not None:
+                return
+            index = max(0, min(int(message.get("sheet_index", len(workbook.sheets)) or 0), len(workbook.sheets)))
+            workbook.sheets.insert(index, WorksheetData(name=name))
+            self.statusBar().showMessage(f"Background sheet added: {self.message_workbook_id(message)}")
+            return
         name = str(message.get("sheet_name") or self.workbook.unique_sheet_name())
         if self.workbook.sheet_by_name(name) is not None:
             return
@@ -1568,6 +1750,17 @@ class SpreadsheetWindow(QMainWindow):
         self.statusBar().showMessage(f"Remote sheet added: {name}")
 
     def apply_remote_sheet_rename(self, message: dict) -> None:
+        if not self.message_targets_active_workbook(message):
+            workbook = self.remote_workbook_for_message(message, create=True)
+            if workbook is None:
+                return
+            sheet = self.remote_sheet_for_workbook(workbook, message)
+            if sheet is None:
+                return
+            sheet.name = str(message.get("sheet_name") or sheet.name)
+            sheet.bump_revision()
+            self.statusBar().showMessage(f"Background sheet renamed: {self.message_workbook_id(message)}")
+            return
         model = self.remote_model(message)
         if model is None:
             return
@@ -1577,6 +1770,16 @@ class SpreadsheetWindow(QMainWindow):
         self.statusBar().showMessage(f"Remote sheet renamed: {name}")
 
     def apply_remote_sheet_delete(self, message: dict) -> None:
+        if not self.message_targets_active_workbook(message):
+            workbook = self.remote_workbook_for_message(message)
+            if workbook is None or len(workbook.sheets) == 1:
+                return
+            sheet = self.remote_sheet_for_workbook(workbook, message)
+            if sheet is None:
+                return
+            workbook.remove_sheet(workbook.sheets.index(sheet))
+            self.statusBar().showMessage(f"Background sheet deleted: {self.message_workbook_id(message)}")
+            return
         if len(self.workbook.sheets) == 1:
             return
         model = self.remote_model(message)
@@ -1594,6 +1797,26 @@ class SpreadsheetWindow(QMainWindow):
         self.statusBar().showMessage("Remote sheet deleted")
 
     def apply_remote_structure_update(self, message: dict) -> None:
+        if not self.message_targets_active_workbook(message):
+            workbook = self.remote_workbook_for_message(message, create=True)
+            if workbook is None:
+                return
+            sheet = self.remote_sheet_for_workbook(workbook, message)
+            if sheet is None:
+                return
+            start = int(message.get("start", 0) or 0)
+            count = max(1, int(message.get("count", 1) or 1))
+            message_type = message.get("type")
+            if message_type == "insert_rows":
+                sheet.insert_rows(start, count)
+            elif message_type == "remove_rows":
+                sheet.remove_rows(start, count)
+            elif message_type == "insert_columns":
+                sheet.insert_columns(start, count)
+            elif message_type == "remove_columns":
+                sheet.remove_columns(start, count)
+            self.statusBar().showMessage(f"Background structure update: {self.message_workbook_id(message)}")
+            return
         model = self.remote_model(message)
         if model is None:
             return
@@ -1634,7 +1857,14 @@ class SpreadsheetWindow(QMainWindow):
         self._insert_sheet_view(len(self.models), sheet)
         return self.models[-1]
 
-    def load_workbook(self, workbook: WorkbookData) -> None:
+    def load_workbook(self, workbook: WorkbookData, *, workbook_id: str | None = None) -> None:
+        if hasattr(self, "workbook"):
+            self.cache_active_workbook()
+        if workbook_id is None:
+            workbook_id = self.workbook_id_for_path(Path(workbook.path) if workbook.path else None)
+        workbook_id = normalize_workbook_id(workbook_id)
+        if workbook_id:
+            workbook = self.prepare_project_workbook(workbook_id, workbook)
         self.workbook = workbook
         self.evaluator = FormulaEvaluator(self.workbook)
         self.models.clear()
@@ -1643,11 +1873,13 @@ class SpreadsheetWindow(QMainWindow):
             self._insert_sheet_view(len(self.models), sheet)
         self.tabs.setCurrentIndex(workbook.active_sheet_index)
         self.current_path = Path(workbook.path) if workbook.path else None
+        self.active_workbook_id = workbook_id
+        self.cache_active_workbook()
         self.update_window_title()
         self.update_undo_redo_actions()
 
     def new_file(self) -> None:
-        self.load_workbook(WorkbookData())
+        self.load_workbook(WorkbookData(), workbook_id="")
         self.send_collaboration_snapshot()
         self.statusBar().showMessage("New workbook created")
 
@@ -1681,6 +1913,8 @@ class SpreadsheetWindow(QMainWindow):
             self.workbook.active_sheet_index = self.tabs.currentIndex()
             save_xlsx(self.workbook, path)
             self.current_path = path
+            self.active_workbook_id = self.workbook_id_for_path(path)
+            self.cache_active_workbook()
             self.update_window_title()
             self.statusBar().showMessage(f"Saved {path}")
         except Exception as exc:
@@ -1701,14 +1935,18 @@ class SpreadsheetWindow(QMainWindow):
         self._insert_sheet_view(len(self.models), sheet)
         self.tabs.setCurrentIndex(len(self.models) - 1)
         self.update_undo_redo_actions()
-        self.send_collaboration_message(sheet_message("sheet_add", len(self.workbook.sheets) - 1, sheet.name))
+        self.send_collaboration_message(
+            sheet_message("sheet_add", len(self.workbook.sheets) - 1, sheet.name, self.active_workbook_id)
+        )
 
     def rename_sheet(self) -> None:
         text, ok = QInputDialog.getText(self, "Rename sheet", "Sheet name", text=self.current_sheet.name)
         if ok and text.strip():
             self.current_sheet.name = text.strip()
             self.tabs.setTabText(self.tabs.currentIndex(), self.current_sheet.name)
-            self.send_collaboration_message(sheet_message("sheet_rename", self.tabs.currentIndex(), self.current_sheet.name))
+            self.send_collaboration_message(
+                sheet_message("sheet_rename", self.tabs.currentIndex(), self.current_sheet.name, self.active_workbook_id)
+            )
 
     def delete_sheet(self) -> None:
         if len(self.workbook.sheets) == 1:
@@ -1720,7 +1958,7 @@ class SpreadsheetWindow(QMainWindow):
         self.tabs.removeTab(index)
         self.models.pop(index)
         self.update_undo_redo_actions()
-        self.send_collaboration_message(sheet_message("sheet_delete", index, sheet_name))
+        self.send_collaboration_message(sheet_message("sheet_delete", index, sheet_name, self.active_workbook_id))
 
     def undo(self) -> None:
         if not self.tabs.count():
@@ -1749,7 +1987,9 @@ class SpreadsheetWindow(QMainWindow):
         sheet_name = self.current_sheet.name
         self.current_model.insert_rows(start, 1)
         self.refresh_workbook_formulas()
-        self.send_collaboration_message(structure_message("insert_rows", sheet_index, sheet_name, start, 1))
+        self.send_collaboration_message(
+            structure_message("insert_rows", sheet_index, sheet_name, start, 1, self.active_workbook_id)
+        )
 
     def delete_row(self) -> None:
         row = self.current_view.currentIndex().row()
@@ -1758,7 +1998,9 @@ class SpreadsheetWindow(QMainWindow):
             sheet_name = self.current_sheet.name
             self.current_model.remove_rows(row, 1)
             self.refresh_workbook_formulas()
-            self.send_collaboration_message(structure_message("remove_rows", sheet_index, sheet_name, row, 1))
+            self.send_collaboration_message(
+                structure_message("remove_rows", sheet_index, sheet_name, row, 1, self.active_workbook_id)
+            )
 
     def insert_column(self) -> None:
         column = self.current_view.currentIndex().column()
@@ -1767,7 +2009,9 @@ class SpreadsheetWindow(QMainWindow):
         sheet_name = self.current_sheet.name
         self.current_model.insert_columns(start, 1)
         self.refresh_workbook_formulas()
-        self.send_collaboration_message(structure_message("insert_columns", sheet_index, sheet_name, start, 1))
+        self.send_collaboration_message(
+            structure_message("insert_columns", sheet_index, sheet_name, start, 1, self.active_workbook_id)
+        )
 
     def delete_column(self) -> None:
         column = self.current_view.currentIndex().column()
@@ -1776,7 +2020,9 @@ class SpreadsheetWindow(QMainWindow):
             sheet_name = self.current_sheet.name
             self.current_model.remove_columns(column, 1)
             self.refresh_workbook_formulas()
-            self.send_collaboration_message(structure_message("remove_columns", sheet_index, sheet_name, column, 1))
+            self.send_collaboration_message(
+                structure_message("remove_columns", sheet_index, sheet_name, column, 1, self.active_workbook_id)
+            )
 
     def clear_cells(self) -> None:
         self.current_view.clear_selection()
@@ -1896,7 +2142,12 @@ class SpreadsheetWindow(QMainWindow):
         self.stats_label.setText(f"Sum: {total:g}\nAverage: {average:g}\nCount: {len(numbers)}{suffix}")
 
     def update_window_title(self) -> None:
-        name = self.current_path.name if self.current_path else "Untitled"
+        if self.current_path:
+            name = self.current_path.name
+        elif self.active_workbook_id:
+            name = Path(self.active_workbook_id).name
+        else:
+            name = "Untitled"
         self.setWindowTitle(f"{name} - PyExcel Lite")
 
     def about(self) -> None:

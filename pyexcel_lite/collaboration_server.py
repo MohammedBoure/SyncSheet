@@ -15,6 +15,7 @@ from .network import (
     DEFAULT_PORT,
     CollaborationServer,
     local_join_addresses,
+    normalize_workbook_id,
     workbook_from_payload,
     workbook_to_payload,
 )
@@ -35,9 +36,10 @@ class CollaborationWorkbookServer(QObject):
         super().__init__()
         self.state_path = Path(state_path) if state_path else None
         self._lock = threading.RLock()
-        state_workbook, state_project = self._load_state()
+        state_workbook, state_project, state_workbooks = self._load_state()
         self.workbook = workbook or state_workbook or WorkbookData()
         self.project = state_project or ProjectData()
+        self.workbooks = state_workbooks
         self.server = CollaborationServer(host=host, port=port, snapshot_message_provider=self.snapshot_message)
         self.server.message_received.connect(self.apply_message, Qt.ConnectionType.DirectConnection)
 
@@ -59,11 +61,17 @@ class CollaborationWorkbookServer(QObject):
 
     def snapshot_message(self) -> dict:
         with self._lock:
-            return {
+            message = {
                 "type": "snapshot",
                 "workbook": workbook_to_payload(self.workbook),
                 "project": project_to_payload(self.project),
             }
+            if self.workbooks:
+                message["workbooks"] = {
+                    workbook_id: workbook_to_payload(workbook)
+                    for workbook_id, workbook in sorted(self.workbooks.items())
+                }
+            return message
 
     @Slot(dict)
     def apply_message(self, message: dict) -> None:
@@ -77,18 +85,26 @@ class CollaborationWorkbookServer(QObject):
         with self._lock:
             if message_type == "snapshot":
                 payload = message.get("workbook")
-                if not isinstance(payload, dict):
-                    return False
-                self.workbook = workbook_from_payload(payload)
+                changed = self._apply_project_workbooks_payload(message.get("workbooks"))
+                if isinstance(payload, dict):
+                    workbook = workbook_from_payload(payload)
+                    workbook_id = normalize_workbook_id(message.get("workbook_id"))
+                    if workbook_id:
+                        self.workbooks[workbook_id] = workbook
+                    else:
+                        self.workbook = workbook
+                    changed = True
                 if isinstance(message.get("project"), dict):
                     self.project = project_from_payload(message.get("project"))
-                return True
+                    changed = True
+                return changed
             if message_type == "project_snapshot":
                 payload = message.get("project")
-                if not isinstance(payload, dict):
-                    return False
-                self.project = project_from_payload(payload)
-                return True
+                changed = self._apply_project_workbooks_payload(message.get("workbooks"))
+                if isinstance(payload, dict):
+                    self.project = project_from_payload(payload)
+                    changed = True
+                return changed
             if message_type == "cell_update":
                 return self._apply_cell_update(message)
             if message_type == "sheet_add":
@@ -102,7 +118,8 @@ class CollaborationWorkbookServer(QObject):
         return False
 
     def _apply_cell_update(self, message: dict) -> bool:
-        sheet = self._resolve_sheet(message, create=True)
+        workbook = self._resolve_workbook(message, create=True)
+        sheet = self._resolve_sheet(workbook, message, create=True)
         if sheet is None:
             return False
         changed = False
@@ -115,16 +132,20 @@ class CollaborationWorkbookServer(QObject):
         return changed
 
     def _apply_sheet_add(self, message: dict) -> bool:
-        name = str(message.get("sheet_name") or self.workbook.unique_sheet_name())
-        if self.workbook.sheet_by_name(name) is not None:
+        workbook = self._resolve_workbook(message, create=True)
+        name = str(message.get("sheet_name") or workbook.unique_sheet_name())
+        if workbook.sheet_by_name(name) is not None:
             return False
-        index = self._clamped_sheet_insert_index(message.get("sheet_index"))
-        self.workbook.sheets.insert(index, WorksheetData(name=name))
-        self.workbook.active_sheet_index = min(self.workbook.active_sheet_index, len(self.workbook.sheets) - 1)
+        index = self._clamped_sheet_insert_index(workbook, message.get("sheet_index"))
+        workbook.sheets.insert(index, WorksheetData(name=name))
+        workbook.active_sheet_index = min(workbook.active_sheet_index, len(workbook.sheets) - 1)
         return True
 
     def _apply_sheet_rename(self, message: dict) -> bool:
-        sheet = self._resolve_sheet(message)
+        workbook = self._resolve_workbook(message)
+        if workbook is None:
+            return False
+        sheet = self._resolve_sheet(workbook, message)
         if sheet is None:
             return False
         name = str(message.get("sheet_name") or sheet.name).strip()
@@ -135,16 +156,22 @@ class CollaborationWorkbookServer(QObject):
         return True
 
     def _apply_sheet_delete(self, message: dict) -> bool:
-        if len(self.workbook.sheets) == 1:
+        workbook = self._resolve_workbook(message)
+        if workbook is None:
             return False
-        sheet = self._resolve_sheet(message)
+        if len(workbook.sheets) == 1:
+            return False
+        sheet = self._resolve_sheet(workbook, message)
         if sheet is None:
             return False
-        self.workbook.remove_sheet(self.workbook.sheets.index(sheet))
+        workbook.remove_sheet(workbook.sheets.index(sheet))
         return True
 
     def _apply_structure_update(self, message: dict) -> bool:
-        sheet = self._resolve_sheet(message)
+        workbook = self._resolve_workbook(message, create=True)
+        if workbook is None:
+            return False
+        sheet = self._resolve_sheet(workbook, message)
         if sheet is None:
             return False
         start = max(0, self._safe_int(message.get("start"), 0))
@@ -162,39 +189,64 @@ class CollaborationWorkbookServer(QObject):
             return False
         return True
 
-    def _resolve_sheet(self, message: dict, *, create: bool = False) -> WorksheetData | None:
+    def _resolve_workbook(self, message: dict, *, create: bool = False) -> WorkbookData | None:
+        workbook_id = normalize_workbook_id(message.get("workbook_id"))
+        if not workbook_id:
+            return self.workbook
+        if workbook_id not in self.workbooks and create:
+            self.workbooks[workbook_id] = WorkbookData()
+        return self.workbooks.get(workbook_id)
+
+    def _resolve_sheet(self, workbook: WorkbookData, message: dict, *, create: bool = False) -> WorksheetData | None:
         sheet_index = self._safe_int(message.get("sheet_index"), -1)
-        if 0 <= sheet_index < len(self.workbook.sheets):
-            return self.workbook.sheets[sheet_index]
+        if 0 <= sheet_index < len(workbook.sheets):
+            return workbook.sheets[sheet_index]
         sheet_name = str(message.get("sheet_name") or "").strip()
         if sheet_name:
-            sheet = self.workbook.sheet_by_name(sheet_name)
+            sheet = workbook.sheet_by_name(sheet_name)
             if sheet is not None:
                 return sheet
         if not create:
             return None
-        sheet = WorksheetData(name=sheet_name or self.workbook.unique_sheet_name())
-        index = self._clamped_sheet_insert_index(sheet_index)
-        self.workbook.sheets.insert(index, sheet)
+        sheet = WorksheetData(name=sheet_name or workbook.unique_sheet_name())
+        index = self._clamped_sheet_insert_index(workbook, sheet_index)
+        workbook.sheets.insert(index, sheet)
         return sheet
 
-    def _clamped_sheet_insert_index(self, value) -> int:
-        return max(0, min(self._safe_int(value, len(self.workbook.sheets)), len(self.workbook.sheets)))
+    def _clamped_sheet_insert_index(self, workbook: WorkbookData, value) -> int:
+        return max(0, min(self._safe_int(value, len(workbook.sheets)), len(workbook.sheets)))
 
-    def _load_state(self) -> tuple[WorkbookData | None, ProjectData | None]:
+    def _apply_project_workbooks_payload(self, payload) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        changed = False
+        for raw_workbook_id, workbook_payload in payload.items():
+            workbook_id = normalize_workbook_id(raw_workbook_id)
+            if not workbook_id or not isinstance(workbook_payload, dict):
+                continue
+            self.workbooks[workbook_id] = workbook_from_payload(workbook_payload)
+            changed = True
+        return changed
+
+    def _load_state(self) -> tuple[WorkbookData | None, ProjectData | None, dict[str, WorkbookData]]:
         if self.state_path is None or not self.state_path.exists():
-            return None, None
+            return None, None, {}
         try:
             payload = json.loads(self.state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return None, None
+            return None, None, {}
         if not isinstance(payload, dict):
-            return None, None
+            return None, None, {}
+        workbooks = {
+            normalize_workbook_id(workbook_id): workbook_from_payload(workbook_payload)
+            for workbook_id, workbook_payload in payload.get("workbooks", {}).items()
+            if normalize_workbook_id(workbook_id) and isinstance(workbook_payload, dict)
+        } if isinstance(payload.get("workbooks"), dict) else {}
         if isinstance(payload.get("workbook"), dict):
             workbook = workbook_from_payload(payload["workbook"])
             project = project_from_payload(payload.get("project")) if isinstance(payload.get("project"), dict) else None
-            return workbook, project
-        return workbook_from_payload(payload), None
+            return workbook, project, workbooks
+        return workbook_from_payload(payload), None, workbooks
 
     def save_state(self) -> None:
         if self.state_path is None:
@@ -204,6 +256,10 @@ class CollaborationWorkbookServer(QObject):
             payload = {
                 "workbook": workbook_to_payload(self.workbook),
                 "project": project_to_payload(self.project),
+                "workbooks": {
+                    workbook_id: workbook_to_payload(workbook)
+                    for workbook_id, workbook in sorted(self.workbooks.items())
+                },
             }
             self.state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

@@ -30,6 +30,31 @@ class CollaborationWorkbookServerTest(unittest.TestCase):
             restored = CollaborationWorkbookServer(state_path=state_path)
             self.assertEqual(restored.workbook.sheets[0].raw_value(0, 1), "=A1*2")
 
+    def test_project_workbook_updates_are_applied_without_replacing_default_workbook(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            service = CollaborationWorkbookServer(state_path=state_path)
+
+            service.apply_message(
+                cell_update_message(
+                    0,
+                    "Sheet1",
+                    [(0, 0, "project value")],
+                    workbook_id="reports/client.xlsx",
+                )
+            )
+
+            self.assertEqual(service.workbook.sheets[0].raw_value(0, 0), "")
+            self.assertEqual(service.workbooks["reports/client.xlsx"].sheets[0].raw_value(0, 0), "project value")
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload["workbooks"]["reports/client.xlsx"]["sheets"][0]["cells"][0]["value"],
+                "project value",
+            )
+
+            restored = CollaborationWorkbookServer(state_path=state_path)
+            self.assertEqual(restored.workbooks["reports/client.xlsx"].sheets[0].raw_value(0, 0), "project value")
+
     def test_sheet_and_structure_messages_update_authoritative_workbook(self):
         service = CollaborationWorkbookServer(state_path=None)
 
