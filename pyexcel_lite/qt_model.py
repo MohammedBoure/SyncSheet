@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Callable
+
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor, QFont
 
@@ -12,12 +15,36 @@ from .workbook import CellStyle, WorksheetData
 DEFAULT_STYLE = CellStyle()
 
 
+@dataclass
+class CellChangeCommand:
+    model: "WorksheetTableModel"
+    changes: list[tuple[int, int, object, object]]
+
+    def undo(self) -> None:
+        self.model.set_values(
+            [(row, column, old_value) for row, column, old_value, _new_value in self.changes],
+            refresh_dependents=True,
+            record_undo=False,
+        )
+
+    def redo(self) -> None:
+        self.model.set_values(
+            [(row, column, new_value) for row, column, _old_value, new_value in self.changes],
+            refresh_dependents=True,
+            record_undo=False,
+        )
+
+
 class WorksheetTableModel(QAbstractTableModel):
     def __init__(self, sheet: WorksheetData, evaluator: FormulaEvaluator):
         super().__init__()
         self.sheet = sheet
         self.evaluator = evaluator
         self.zoom_factor = 1.0
+        self.undo_stack: list[CellChangeCommand] = []
+        self.redo_stack: list[CellChangeCommand] = []
+        self.history_limit = 200
+        self.history_changed: Callable[[], None] | None = None
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else self.sheet.row_count
@@ -57,19 +84,23 @@ class WorksheetTableModel(QAbstractTableModel):
             return self._alignment_from_style(style)
         return None
 
-    def setData(self, index: QModelIndex, value, role: int = Qt.EditRole, refresh_dependents: bool = True) -> bool:
+    def setData(self, index: QModelIndex, value, role: int = Qt.EditRole, refresh_dependents: bool = True, record_undo: bool = True) -> bool:
         if role != Qt.EditRole or not index.isValid():
             return False
-        changed = self.sheet.set_value(index.row(), index.column(), "" if value is None else str(value))
+        old_value = self.sheet.raw_value(index.row(), index.column())
+        next_value = "" if value is None else str(value)
+        changed = self.sheet.set_value(index.row(), index.column(), next_value)
         if not changed:
             return True
-        self.evaluator.invalidate_sheet(self.sheet)
+        if record_undo:
+            self._push_undo([(index.row(), index.column(), old_value, next_value)])
+        self.evaluator.invalidate_sheet()
         self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
         if refresh_dependents:
             self.refresh_formulas()
         return True
 
-    def set_values(self, values: list[tuple[int, int, object]], refresh_dependents: bool = True) -> None:
+    def set_values(self, values: list[tuple[int, int, object]], refresh_dependents: bool = True, record_undo: bool = True) -> None:
         if not values:
             return
         max_row = max(row for row, _column, _value in values)
@@ -80,12 +111,19 @@ class WorksheetTableModel(QAbstractTableModel):
         left = min(column for _row, column, _value in values)
         right = max(column for _row, column, _value in values)
         changed = False
+        changes: list[tuple[int, int, object, object]] = []
         for row, column, value in values:
-            changed = self.sheet.set_value(row, column, "" if value is None else str(value), touch=False) or changed
+            old_value = self.sheet.raw_value(row, column)
+            next_value = "" if value is None else str(value)
+            if old_value != next_value:
+                changes.append((row, column, old_value, next_value))
+            changed = self.sheet.set_value(row, column, next_value, touch=False) or changed
         if not changed:
             return
         self.sheet.bump_revision()
-        self.evaluator.invalidate_sheet(self.sheet)
+        if record_undo and changes:
+            self._push_undo(changes)
+        self.evaluator.invalidate_sheet()
         self.dataChanged.emit(self.index(top, left), self.index(bottom, right), [Qt.DisplayRole, Qt.EditRole])
         if refresh_dependents:
             self.refresh_formulas()
@@ -93,6 +131,39 @@ class WorksheetTableModel(QAbstractTableModel):
     def clear_indexes(self, indexes: list[QModelIndex], refresh_dependents: bool = True) -> None:
         values = [(index.row(), index.column(), "") for index in indexes if index.isValid()]
         self.set_values(values, refresh_dependents=refresh_dependents)
+
+    def can_undo(self) -> bool:
+        return bool(self.undo_stack)
+
+    def can_redo(self) -> bool:
+        return bool(self.redo_stack)
+
+    def undo(self) -> None:
+        if not self.undo_stack:
+            return
+        command = self.undo_stack.pop()
+        command.undo()
+        self.redo_stack.append(command)
+        self._notify_history_changed()
+
+    def redo(self) -> None:
+        if not self.redo_stack:
+            return
+        command = self.redo_stack.pop()
+        command.redo()
+        self.undo_stack.append(command)
+        self._notify_history_changed()
+
+    def _push_undo(self, changes: list[tuple[int, int, object, object]]) -> None:
+        self.undo_stack.append(CellChangeCommand(self, changes))
+        if len(self.undo_stack) > self.history_limit:
+            self.undo_stack = self.undo_stack[-self.history_limit :]
+        self.redo_stack.clear()
+        self._notify_history_changed()
+
+    def _notify_history_changed(self) -> None:
+        if self.history_changed:
+            self.history_changed()
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlags:
         if not index.isValid():
@@ -128,25 +199,25 @@ class WorksheetTableModel(QAbstractTableModel):
         self.beginInsertRows(QModelIndex(), start, start + count - 1)
         self.sheet.insert_rows(start, count)
         self.endInsertRows()
-        self.evaluator.invalidate_sheet(self.sheet)
+        self.evaluator.invalidate_sheet()
 
     def remove_rows(self, start: int, count: int = 1) -> None:
         self.beginRemoveRows(QModelIndex(), start, start + count - 1)
         self.sheet.remove_rows(start, count)
         self.endRemoveRows()
-        self.evaluator.invalidate_sheet(self.sheet)
+        self.evaluator.invalidate_sheet()
 
     def insert_columns(self, start: int, count: int = 1) -> None:
         self.beginInsertColumns(QModelIndex(), start, start + count - 1)
         self.sheet.insert_columns(start, count)
         self.endInsertColumns()
-        self.evaluator.invalidate_sheet(self.sheet)
+        self.evaluator.invalidate_sheet()
 
     def remove_columns(self, start: int, count: int = 1) -> None:
         self.beginRemoveColumns(QModelIndex(), start, start + count - 1)
         self.sheet.remove_columns(start, count)
         self.endRemoveColumns()
-        self.evaluator.invalidate_sheet(self.sheet)
+        self.evaluator.invalidate_sheet()
 
     def refresh_all(self) -> None:
         if self.rowCount() and self.columnCount():

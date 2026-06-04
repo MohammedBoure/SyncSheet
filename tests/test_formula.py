@@ -103,6 +103,22 @@ class FormulaEvaluatorTest(unittest.TestCase):
         self.assertAlmostEqual(self.evaluator.evaluate_cell(self.sheet, 3, 2), 1.0)
         self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 4, 2), 400.0)
 
+    def test_cross_sheet_references_and_ranges(self):
+        other = self.workbook.add_sheet("Data")
+        other.set_value(0, 0, "10")
+        other.set_value(1, 0, "20")
+        other.set_value(2, 0, "30")
+        other.set_value(0, 1, "5")
+        self.sheet.set_value(0, 0, "=SUM(Data!A1:A3)+Data!B1")
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 0), 65.0)
+
+    def test_quoted_cross_sheet_references(self):
+        other = self.workbook.add_sheet("Data Sheet")
+        other.set_value(0, 0, "7")
+        other.set_value(1, 0, "8")
+        self.sheet.set_value(0, 0, "=SUM('Data Sheet'!A1:A2)")
+        self.assertEqual(self.evaluator.evaluate_cell(self.sheet, 0, 0), 15.0)
+
     def test_cycle_detection(self):
         self.sheet.set_value(0, 0, "=B1")
         self.sheet.set_value(0, 1, "=A1")

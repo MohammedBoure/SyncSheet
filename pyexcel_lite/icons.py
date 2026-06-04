@@ -167,6 +167,27 @@ def _draw_icon(p: QPainter, name: str, size: int) -> None:
         p.drawRoundedRect(QRectF(7, 8, 15, 10), 3, 3)
         p.setPen(_pen(RED, 2))
         p.drawLine(QPointF(9, 20), QPointF(22, 7))
+    elif name in {"undo", "redo"}:
+        p.setPen(_pen(GREEN, 2.2))
+        if name == "undo":
+            p.drawArc(QRectF(6, 8, 16, 12), 30 * 16, 250 * 16)
+            p.drawLine(QPointF(8, 9), QPointF(4, 13))
+            p.drawLine(QPointF(8, 9), QPointF(12, 13))
+        else:
+            p.drawArc(QRectF(6, 8, 16, 12), 140 * 16, -250 * 16)
+            p.drawLine(QPointF(20, 9), QPointF(24, 13))
+            p.drawLine(QPointF(20, 9), QPointF(16, 13))
+    elif name == "chart":
+        p.setPen(_pen(INK, 1.5))
+        p.drawLine(QPointF(5, 22), QPointF(24, 22))
+        p.drawLine(QPointF(5, 22), QPointF(5, 5))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(BLUE))
+        p.drawRoundedRect(QRectF(8, 14, 3.5, 7), 1, 1)
+        p.setBrush(QColor(GREEN))
+        p.drawRoundedRect(QRectF(14, 9, 3.5, 12), 1, 1)
+        p.setBrush(QColor(AMBER))
+        p.drawRoundedRect(QRectF(20, 12, 3.5, 9), 1, 1)
     elif name == "zoom_in":
         _magnifier(p, True)
     elif name == "zoom_out":

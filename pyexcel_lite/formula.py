@@ -19,6 +19,12 @@ CELL_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(\$?[A-Za-z]{1,4}\$?[1-9][0-9]*)(?!
 RANGE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(\$?[A-Za-z]{1,4}\$?[1-9][0-9]*):(\$?[A-Za-z]{1,4}\$?[1-9][0-9]*)(?![A-Za-z0-9_])"
 )
+SHEET_CELL_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))!(\$?[A-Za-z]{1,4}\$?[1-9][0-9]*)(?![A-Za-z0-9_])"
+)
+SHEET_RANGE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))!(\$?[A-Za-z]{1,4}\$?[1-9][0-9]*):(\$?[A-Za-z]{1,4}\$?[1-9][0-9]*)(?![A-Za-z0-9_])"
+)
 FUNCTION_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_\.]*)\s*\(")
 BOOL_PATTERN = re.compile(r"\b(TRUE|FALSE)\b", re.IGNORECASE)
 EQUALS_PATTERN = re.compile(r"(?<![<>=!])=(?!=)")
@@ -68,7 +74,7 @@ def _split_outside_strings(text: str):
                 current = []
                 quote = None
         else:
-            if char in ("'", '"'):
+            if char == '"':
                 if current:
                     yield False, "".join(current)
                     current = []
@@ -278,6 +284,7 @@ class FormulaEvaluator:
         self.functions = self._build_functions()
         self._formula_cache: dict[tuple[int, int, int, int], Any] = {}
         self._formula_cache_sheets: dict[int, int] = {}
+        self._workbook_revision_signature: tuple[tuple[int, int], ...] = ()
         self._parsed_cache: dict[str, ast.AST] = {}
         self.max_formula_cache_entries = 50000
         self.max_parsed_cache_entries = 10000
@@ -395,7 +402,7 @@ class FormulaEvaluator:
         raw = sheet.raw_value(row, column)
         if not isinstance(raw, str) or not raw.startswith("="):
             return raw
-        self._sync_sheet_cache(sheet)
+        self._sync_workbook_cache()
         cell_key = (sheet.name, row, column)
         cache_key = (id(sheet), sheet.revision, row, column)
         use_cache = not self._is_volatile(raw) and (visiting is None or cell_key not in visiting)
@@ -448,10 +455,20 @@ class FormulaEvaluator:
         if sheet is None:
             self._formula_cache.clear()
             self._formula_cache_sheets.clear()
+            self._workbook_revision_signature = ()
             return
         sheet_id = id(sheet)
         self._formula_cache = {key: value for key, value in self._formula_cache.items() if key[0] != sheet_id}
         self._formula_cache_sheets.pop(sheet_id, None)
+        self._workbook_revision_signature = ()
+
+    def _sync_workbook_cache(self) -> None:
+        signature = tuple((id(sheet), sheet.revision) for sheet in self.workbook.sheets)
+        if signature == self._workbook_revision_signature:
+            return
+        self._formula_cache.clear()
+        self._formula_cache_sheets.clear()
+        self._workbook_revision_signature = signature
 
     def _sync_sheet_cache(self, sheet: WorksheetData) -> None:
         sheet_id = id(sheet)
@@ -483,6 +500,16 @@ class FormulaEvaluator:
         prepared = _replace_outside_strings(prepared, BOOL_PATTERN, lambda m: m.group(1).upper())
         prepared = _replace_outside_strings(prepared, EQUALS_PATTERN, lambda _m: "==")
         prepared = _replace_outside_strings(prepared, FUNCTION_PATTERN, lambda m: f"{m.group(1).upper().replace('.', '_')}(")
+        prepared = _replace_outside_strings(
+            prepared,
+            SHEET_RANGE_PATTERN,
+            lambda m: f'SHEETRANGE("{m.group(1) or m.group(2)}","{normalize_cell_ref(m.group(3))}:{normalize_cell_ref(m.group(4))}")',
+        )
+        prepared = _replace_outside_strings(
+            prepared,
+            SHEET_CELL_PATTERN,
+            lambda m: f'SHEETCELL("{m.group(1) or m.group(2)}","{normalize_cell_ref(m.group(3))}")',
+        )
         prepared = _replace_outside_strings(prepared, RANGE_PATTERN, lambda m: f'RANGE("{normalize_cell_ref(m.group(1))}:{normalize_cell_ref(m.group(2))}")')
         prepared = _replace_outside_strings(prepared, CELL_PATTERN, lambda m: f'CELL("{normalize_cell_ref(m.group(1))}")')
         prepared = _replace_outside_strings(prepared, PERCENT_PATTERN, lambda m: f"({m.group(1)}/100)")
@@ -494,7 +521,7 @@ class FormulaEvaluator:
                 raise FormulaError(f"Unsupported formula syntax: {node.__class__.__name__}")
             if isinstance(node, ast.Call) and not isinstance(node.func, ast.Name):
                 raise FormulaError("Only direct formula functions are allowed")
-            if isinstance(node, ast.Name) and node.id not in self.functions and node.id not in {"CELL", "RANGE", "TRUE", "FALSE", "True", "False"}:
+            if isinstance(node, ast.Name) and node.id not in self.functions and node.id not in {"CELL", "RANGE", "SHEETCELL", "SHEETRANGE", "TRUE", "FALSE", "True", "False"}:
                 raise FormulaError(f"Unknown formula name: {node.id}")
 
     def _environment(self, sheet: WorksheetData, visiting: set[tuple[str, int, int]]) -> dict[str, Any]:
@@ -520,8 +547,38 @@ class FormulaEvaluator:
                 rows.append(tuple(values))
             return ExcelRange(tuple(rows))
 
+        def resolve_sheet(sheet_name: str) -> WorksheetData:
+            target_sheet = self.workbook.sheet_by_name(sheet_name)
+            if target_sheet is None:
+                raise FormulaError(f"Unknown sheet: {sheet_name}")
+            return target_sheet
+
+        def sheet_cell(sheet_name: str, address: str) -> Any:
+            target_sheet = resolve_sheet(sheet_name)
+            ref = parse_cell_ref(address)
+            value = self.evaluate_cell(target_sheet, ref.row, ref.column, visiting)
+            return coerce_reference_value(value)
+
+        def sheet_range(sheet_name: str, address: str) -> ExcelRange:
+            target_sheet = resolve_sheet(sheet_name)
+            start, end = address.split(":", 1)
+            first = parse_cell_ref(start)
+            last = parse_cell_ref(end)
+            row_from, row_to = sorted((first.row, last.row))
+            col_from, col_to = sorted((first.column, last.column))
+            rows = []
+            for row in range(row_from, row_to + 1):
+                values = []
+                for column in range(col_from, col_to + 1):
+                    value = self.evaluate_cell(target_sheet, row, column, visiting)
+                    values.append(coerce_reference_value(value))
+                rows.append(tuple(values))
+            return ExcelRange(tuple(rows))
+
         env["CELL"] = cell
         env["RANGE"] = cell_range
+        env["SHEETCELL"] = sheet_cell
+        env["SHEETRANGE"] = sheet_range
         env["TRUE"] = True
         env["FALSE"] = False
         env["True"] = True

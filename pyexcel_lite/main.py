@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .chart import ChartPoint, ChartWidget
 from .cell_address import index_to_column_name
 from .formula import FormulaEvaluator, to_number
 from .icons import app_icon
@@ -181,6 +182,9 @@ class SpreadsheetWindow(QMainWindow):
         self.insert_column_action = QAction("Insert Column", self, triggered=self.insert_column)
         self.delete_column_action = QAction("Delete Column", self, triggered=self.delete_column)
         self.clear_action = QAction("Clear", self, shortcut=QKeySequence.Delete, triggered=self.clear_cells)
+        self.undo_action = QAction("Undo", self, shortcut=QKeySequence.Undo, triggered=self.undo)
+        self.redo_action = QAction("Redo", self, shortcut=QKeySequence.Redo, triggered=self.redo)
+        self.chart_action = QAction("Chart", self, triggered=self.create_chart_from_selection)
         self.zoom_in_action = QAction("Zoom In", self, triggered=self.zoom_in)
         self.zoom_in_action.setShortcuts([QKeySequence("Ctrl++"), QKeySequence("Ctrl+=")])
         self.zoom_out_action = QAction("Zoom Out", self, shortcut=QKeySequence("Ctrl+-"), triggered=self.zoom_out)
@@ -203,6 +207,9 @@ class SpreadsheetWindow(QMainWindow):
             self.insert_column_action: ("column_insert", "Insert a column before the current column"),
             self.delete_column_action: ("column_delete", "Delete the current column"),
             self.clear_action: ("clear", "Clear selected cells"),
+            self.undo_action: ("undo", "Undo the last cell edit"),
+            self.redo_action: ("redo", "Redo the last undone edit"),
+            self.chart_action: ("chart", "Create a chart from the selected cells"),
             self.zoom_in_action: ("zoom_in", "Zoom in"),
             self.zoom_out_action: ("zoom_out", "Zoom out"),
             self.zoom_reset_action: ("zoom_reset", "Reset zoom"),
@@ -239,9 +246,13 @@ class SpreadsheetWindow(QMainWindow):
         sheet_menu = self.menuBar().addMenu("Sheet")
         sheet_menu.addActions([self.add_sheet_action, self.rename_sheet_action, self.delete_sheet_action])
         edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu.addActions([self.undo_action, self.redo_action])
+        edit_menu.addSeparator()
         edit_menu.addActions([self.insert_row_action, self.delete_row_action, self.insert_column_action, self.delete_column_action, self.clear_action])
         view_menu = self.menuBar().addMenu("View")
         view_menu.addActions([self.zoom_in_action, self.zoom_out_action, self.zoom_reset_action])
+        insert_menu = self.menuBar().addMenu("Insert")
+        insert_menu.addAction(self.chart_action)
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction(self.about_action)
 
@@ -251,7 +262,11 @@ class SpreadsheetWindow(QMainWindow):
         self.addToolBar(file_bar)
         file_bar.addActions([self.new_action, self.open_action, self.save_action, self.save_as_action])
         file_bar.addSeparator()
+        file_bar.addActions([self.undo_action, self.redo_action])
+        file_bar.addSeparator()
         file_bar.addActions([self.add_sheet_action, self.export_csv_action])
+        file_bar.addSeparator()
+        file_bar.addAction(self.chart_action)
         file_bar.addSeparator()
         file_bar.addActions([self.zoom_out_action, self.zoom_reset_action, self.zoom_in_action])
         self.zoom_box = QSpinBox()
@@ -442,6 +457,21 @@ class SpreadsheetWindow(QMainWindow):
         layout.addWidget(self.custom_algorithm_input)
         layout.addLayout(custom_buttons)
         self.reload_formula_templates()
+        layout.addWidget(QLabel("Charts"))
+        self.chart_type_box = QComboBox()
+        self.chart_type_box.addItems(["Bar", "Line", "Pie"])
+        self.chart_title_input = QLineEdit()
+        self.chart_title_input.setPlaceholderText("Chart title")
+        self.create_chart_button = QToolButton()
+        self.create_chart_button.setText("Create")
+        self.create_chart_button.setIcon(app_icon("chart"))
+        self.create_chart_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.create_chart_button.clicked.connect(self.create_chart_from_selection)
+        self.chart_widget = ChartWidget()
+        layout.addWidget(self.chart_type_box)
+        layout.addWidget(self.chart_title_input)
+        layout.addWidget(self.create_chart_button)
+        layout.addWidget(self.chart_widget)
         layout.addStretch(1)
         return widget
 
@@ -553,6 +583,63 @@ class SpreadsheetWindow(QMainWindow):
         self.formula_input.setText(formula)
         self.update_selection_stats()
 
+    def create_chart_from_selection(self) -> None:
+        points = self.chart_points_from_selection()
+        title = self.chart_title_input.text().strip() if hasattr(self, "chart_title_input") else ""
+        if not title:
+            title = self.selected_range_reference()
+        chart_type = self.chart_type_box.currentText() if hasattr(self, "chart_type_box") else "Bar"
+        self.chart_widget.set_chart(points, chart_type, title)
+        if points:
+            self.statusBar().showMessage(f"Chart created with {len(points)} points")
+        else:
+            self.statusBar().showMessage("No numeric data found for chart")
+
+    def chart_points_from_selection(self) -> list[ChartPoint]:
+        if not hasattr(self, "tabs") or not self.tabs.count():
+            return []
+        selection = self.current_view.selectionModel().selection()
+        if selection.isEmpty():
+            index = self.current_view.currentIndex()
+            if not index.isValid():
+                return []
+            selection = QItemSelection(index, index)
+        ranges = list(selection)
+        min_row = min(item.top() for item in ranges)
+        max_row = max(item.bottom() for item in ranges)
+        min_column = min(item.left() for item in ranges)
+        max_column = max(item.right() for item in ranges)
+        if max_column > min_column:
+            points = self._paired_chart_points(min_row, max_row, min_column, min_column + 1)
+            if points:
+                return points
+        return self._flat_numeric_chart_points(ranges)
+
+    def _paired_chart_points(self, top: int, bottom: int, label_column: int, value_column: int) -> list[ChartPoint]:
+        points: list[ChartPoint] = []
+        for row in range(top, bottom + 1):
+            label = str(self.current_sheet.raw_value(row, label_column) or self.cell_address(row, label_column))
+            try:
+                value = to_number(self.evaluator.evaluate_cell(self.current_sheet, row, value_column))
+            except Exception:
+                continue
+            points.append(ChartPoint(label, value))
+        return points
+
+    def _flat_numeric_chart_points(self, ranges: list[QItemSelection]) -> list[ChartPoint]:
+        points: list[ChartPoint] = []
+        for item in ranges:
+            for row in range(item.top(), item.bottom() + 1):
+                for column in range(item.left(), item.right() + 1):
+                    try:
+                        value = to_number(self.evaluator.evaluate_cell(self.current_sheet, row, column))
+                    except Exception:
+                        continue
+                    points.append(ChartPoint(self.cell_address(row, column), value))
+                    if len(points) >= 200:
+                        return points
+        return points
+
     def load_workbook(self, workbook: WorkbookData) -> None:
         self.workbook = workbook
         self.evaluator = FormulaEvaluator(self.workbook)
@@ -560,6 +647,7 @@ class SpreadsheetWindow(QMainWindow):
         self.tabs.clear()
         for sheet in workbook.sheets:
             model = WorksheetTableModel(sheet, self.evaluator)
+            model.history_changed = self.update_undo_redo_actions
             view = SpreadsheetView(self)
             view.setModel(model)
             self.apply_zoom_to_view(view, model)
@@ -569,6 +657,7 @@ class SpreadsheetWindow(QMainWindow):
         self.tabs.setCurrentIndex(workbook.active_sheet_index)
         self.current_path = Path(workbook.path) if workbook.path else None
         self.update_window_title()
+        self.update_undo_redo_actions()
 
     def new_file(self) -> None:
         self.load_workbook(WorkbookData())
@@ -621,6 +710,7 @@ class SpreadsheetWindow(QMainWindow):
     def add_sheet(self) -> None:
         sheet = self.workbook.add_sheet()
         model = WorksheetTableModel(sheet, self.evaluator)
+        model.history_changed = self.update_undo_redo_actions
         view = SpreadsheetView(self)
         view.setModel(model)
         self.apply_zoom_to_view(view, model)
@@ -628,6 +718,7 @@ class SpreadsheetWindow(QMainWindow):
         self.models.append(model)
         self.tabs.addTab(view, sheet.name)
         self.tabs.setCurrentWidget(view)
+        self.update_undo_redo_actions()
 
     def rename_sheet(self) -> None:
         text, ok = QInputDialog.getText(self, "Rename sheet", "Sheet name", text=self.current_sheet.name)
@@ -643,6 +734,27 @@ class SpreadsheetWindow(QMainWindow):
         self.workbook.remove_sheet(index)
         self.tabs.removeTab(index)
         self.models.pop(index)
+        self.update_undo_redo_actions()
+
+    def undo(self) -> None:
+        if not self.tabs.count():
+            return
+        self.current_model.undo()
+        self.update_formula_bar()
+        self.update_selection_stats()
+
+    def redo(self) -> None:
+        if not self.tabs.count():
+            return
+        self.current_model.redo()
+        self.update_formula_bar()
+        self.update_selection_stats()
+
+    def update_undo_redo_actions(self) -> None:
+        if not hasattr(self, "undo_action") or not hasattr(self, "tabs") or not self.tabs.count():
+            return
+        self.undo_action.setEnabled(self.current_model.can_undo())
+        self.redo_action.setEnabled(self.current_model.can_redo())
 
     def insert_row(self) -> None:
         row = self.current_view.currentIndex().row()
@@ -722,6 +834,7 @@ class SpreadsheetWindow(QMainWindow):
             self.workbook.active_sheet_index = index
             self.update_formula_bar()
             self.update_formula_preview()
+            self.update_undo_redo_actions()
             self.update_window_title()
 
     def on_selection_changed(self, selected: QItemSelection, _deselected: QItemSelection) -> None:
