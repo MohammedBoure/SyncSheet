@@ -50,7 +50,15 @@ class UndoChartCrossSheetTest(unittest.TestCase):
             self.assertEqual(window.chart_widget.chart_type, "Bar")
             self.assertEqual([point.label for point in window.chart_widget.points], ["Gold", "Silver"])
             self.assertEqual([point.value for point in window.chart_widget.points], [120.0, 80.0])
+            self.app.processEvents()
+            self.assertIsNotNone(window.chart_dialog)
+            self.assertTrue(window.chart_dialog.isVisible())
+            self.assertEqual(window.chart_dialog_widget.title, "Metals")
+            self.assertEqual(window.chart_dialog_widget.chart_type, "Bar")
+            self.assertEqual([point.label for point in window.chart_dialog_widget.points], ["Gold", "Silver"])
         finally:
+            if window.chart_dialog is not None:
+                window.chart_dialog.close()
             window.close()
 
     def test_cross_sheet_formula_updates_after_source_sheet_change(self):

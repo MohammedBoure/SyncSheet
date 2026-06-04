@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -181,6 +182,8 @@ class SpreadsheetWindow(QMainWindow):
         self.collaboration_status = "Offline"
         self.collaboration_clients = 0
         self.applying_remote_update = False
+        self.chart_dialog: QDialog | None = None
+        self.chart_dialog_widget: ChartWidget | None = None
         self.startup_settings = load_startup_settings()
         self.setWindowTitle("PyExcel Lite")
         self.resize(1280, 760)
@@ -1156,9 +1159,43 @@ class SpreadsheetWindow(QMainWindow):
         chart_type = self.chart_type_box.currentText() if hasattr(self, "chart_type_box") else "Bar"
         self.chart_widget.set_chart(points, chart_type, title)
         if points:
+            self.show_chart_dialog(points, chart_type, title)
             self.statusBar().showMessage(f"Chart created with {len(points)} points")
         else:
             self.statusBar().showMessage("No numeric data found for chart")
+
+    def show_chart_dialog(self, points: list[ChartPoint], chart_type: str, title: str) -> None:
+        if self.chart_dialog is not None:
+            self.chart_dialog.close()
+        dialog = QDialog(self)
+        dialog.setObjectName("chartDialog")
+        dialog.setWindowTitle(title or "Chart")
+        dialog.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        chart = ChartWidget()
+        chart.setObjectName("chartDialogWidget")
+        chart.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        chart.setMinimumHeight(420)
+        chart.set_chart(points, chart_type, title)
+        layout.addWidget(chart, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            dialog.resize(max(900, available.width()), max(620, available.height()))
+            dialog.move(available.topLeft())
+        else:
+            dialog.resize(1100, 760)
+        dialog.showMaximized()
+        self.chart_dialog = dialog
+        self.chart_dialog_widget = chart
 
     def chart_points_from_selection(self) -> list[ChartPoint]:
         if not hasattr(self, "tabs") or not self.tabs.count():

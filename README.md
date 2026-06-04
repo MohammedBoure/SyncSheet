@@ -10,7 +10,7 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 - Project workspace support for opening a whole folder tree as one project, including nested folders and multiple workbook or CSV files.
 - Large-table performance improvements with batched paste/clear operations, partial redraws, and cached formula results.
 - Undo and redo for cell edits, paste operations, clears, and generated formulas.
-- Bar, line, and pie charts from the selected cells.
+- Bar, line, and pie charts from the selected cells, with full-screen dialog viewing.
 - Realtime LAN collaboration with Host, Join, and Leave controls so multiple users can edit the same workbook together.
 - Network startup settings that can launch the app in manual mode, connect directly to a shared server, or make the current program host a server automatically.
 - Standalone shared-workbook and project server for LAN client/server use, with JSON state persistence.
