@@ -91,20 +91,17 @@ class SpreadsheetView(QTableView):
         text = QApplication.clipboard().text()
         if not text:
             return
+        values = []
         for row_offset, line in enumerate(text.splitlines()):
             for column_offset, value in enumerate(line.split("\t")):
-                target = model.index(current.row() + row_offset, current.column() + column_offset)
-                model.setData(target, value, Qt.EditRole)
-        model.refresh_all()
+                values.append((current.row() + row_offset, current.column() + column_offset, value))
+        model.set_values(values, refresh_dependents=True)
 
     def clear_selection(self) -> None:
         indexes = self.selectedIndexes()
         if not indexes:
             return
-        model = self.model()
-        for index in indexes:
-            model.setData(index, "", Qt.EditRole)
-        model.refresh_all()
+        self.model().clear_indexes(indexes, refresh_dependents=True)
 
 
 class SpreadsheetWindow(QMainWindow):
@@ -115,6 +112,7 @@ class SpreadsheetWindow(QMainWindow):
         self.models: list[WorksheetTableModel] = []
         self.current_path: Path | None = None
         self.zoom_percent = 100
+        self.max_stats_cells = 5000
         self.setWindowTitle("PyExcel Lite")
         self.resize(1280, 760)
         self._build_actions()
@@ -335,6 +333,7 @@ class SpreadsheetWindow(QMainWindow):
         model = WorksheetTableModel(sheet, self.evaluator)
         view = SpreadsheetView(self)
         view.setModel(model)
+        self.apply_zoom_to_view(view, model)
         view.selectionModel().selectionChanged.connect(self.on_selection_changed)
         self.models.append(model)
         self.tabs.addTab(view, sheet.name)
@@ -386,7 +385,10 @@ class SpreadsheetWindow(QMainWindow):
         self.set_zoom_percent(100)
 
     def set_zoom_percent(self, percent: int) -> None:
-        self.zoom_percent = max(40, min(220, int(percent)))
+        next_percent = max(40, min(220, int(percent)))
+        if next_percent == self.zoom_percent:
+            return
+        self.zoom_percent = next_percent
         if hasattr(self, "zoom_box") and self.zoom_box.value() != self.zoom_percent:
             self.zoom_box.blockSignals(True)
             self.zoom_box.setValue(self.zoom_percent)
@@ -411,7 +413,6 @@ class SpreadsheetWindow(QMainWindow):
         if not index.isValid():
             return
         self.current_model.setData(index, self.formula_input.text(), Qt.EditRole)
-        self.current_model.refresh_all()
 
     def apply_style(self, **changes) -> None:
         if not hasattr(self, "tabs") or not self.tabs.count():
@@ -460,15 +461,17 @@ class SpreadsheetWindow(QMainWindow):
         last = index_to_column_name(max(columns)) + str(max(rows) + 1)
         self.selection_label.setText(f"{first}:{last}\nCells: {len(indexes)}")
         numbers = []
-        for index in indexes:
-            value = self.evaluator.evaluate_cell(self.current_sheet, index.row(), index.column())
+        scanned_indexes = indexes[: self.max_stats_cells]
+        for index in scanned_indexes:
             try:
+                value = self.evaluator.evaluate_cell(self.current_sheet, index.row(), index.column())
                 numbers.append(to_number(value))
             except Exception:
                 pass
         total = sum(numbers)
         average = total / len(numbers) if numbers else 0
-        self.stats_label.setText(f"Sum: {total:g}\nAverage: {average:g}\nCount: {len(numbers)}")
+        suffix = f"\nScanned: {len(scanned_indexes)} of {len(indexes)}" if len(indexes) > len(scanned_indexes) else ""
+        self.stats_label.setText(f"Sum: {total:g}\nAverage: {average:g}\nCount: {len(numbers)}{suffix}")
 
     def update_window_title(self) -> None:
         name = self.current_path.name if self.current_path else "Untitled"

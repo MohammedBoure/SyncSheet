@@ -9,6 +9,8 @@ from .cell_address import index_to_column_name
 from .formula import FormulaEvaluator
 from .workbook import CellStyle, WorksheetData
 
+DEFAULT_STYLE = CellStyle()
+
 
 class WorksheetTableModel(QAbstractTableModel):
     def __init__(self, sheet: WorksheetData, evaluator: FormulaEvaluator):
@@ -28,28 +30,58 @@ class WorksheetTableModel(QAbstractTableModel):
             return None
         row = index.row()
         column = index.column()
-        cell = self.sheet.get_cell(row, column)
+        cell = self.sheet.cells.get((row, column))
+        raw_value = "" if cell is None else cell.value
+        style = DEFAULT_STYLE if cell is None else cell.style
         if role == Qt.DisplayRole:
-            return self.evaluator.display(cell.value, self.sheet, row, column)
+            if raw_value == "":
+                return ""
+            return self.evaluator.display(raw_value, self.sheet, row, column)
         if role == Qt.EditRole:
-            return cell.value
+            return raw_value
         if role == Qt.FontRole:
-            return self._font_from_style(cell.style)
+            if cell is None or style == DEFAULT_STYLE:
+                return None
+            return self._font_from_style(style)
         if role == Qt.ForegroundRole:
-            return QBrush(QColor(cell.style.text_color))
+            if cell is None or style.text_color == DEFAULT_STYLE.text_color:
+                return None
+            return QBrush(QColor(style.text_color))
         if role == Qt.BackgroundRole:
-            return QBrush(QColor(cell.style.fill_color))
+            if cell is None or style.fill_color == DEFAULT_STYLE.fill_color:
+                return None
+            return QBrush(QColor(style.fill_color))
         if role == Qt.TextAlignmentRole:
-            return self._alignment_from_style(cell.style)
+            if cell is None or style.horizontal == DEFAULT_STYLE.horizontal:
+                return None
+            return self._alignment_from_style(style)
         return None
 
-    def setData(self, index: QModelIndex, value, role: int = Qt.EditRole) -> bool:
+    def setData(self, index: QModelIndex, value, role: int = Qt.EditRole, refresh_dependents: bool = True) -> bool:
         if role != Qt.EditRole or not index.isValid():
             return False
         self.sheet.set_value(index.row(), index.column(), "" if value is None else str(value))
         self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
-        self.refresh_all()
+        if refresh_dependents:
+            self.refresh_all()
         return True
+
+    def set_values(self, values: list[tuple[int, int, object]], refresh_dependents: bool = True) -> None:
+        if not values:
+            return
+        top = min(row for row, _column, _value in values)
+        bottom = max(row for row, _column, _value in values)
+        left = min(column for _row, column, _value in values)
+        right = max(column for _row, column, _value in values)
+        for row, column, value in values:
+            self.sheet.set_value(row, column, "" if value is None else str(value))
+        self.dataChanged.emit(self.index(top, left), self.index(bottom, right), [Qt.DisplayRole, Qt.EditRole])
+        if refresh_dependents:
+            self.refresh_all()
+
+    def clear_indexes(self, indexes: list[QModelIndex], refresh_dependents: bool = True) -> None:
+        values = [(index.row(), index.column(), "") for index in indexes if index.isValid()]
+        self.set_values(values, refresh_dependents=refresh_dependents)
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlags:
         if not index.isValid():
@@ -75,6 +107,8 @@ class WorksheetTableModel(QAbstractTableModel):
         self.dataChanged.emit(self.index(top, left), self.index(bottom, right), [Qt.FontRole, Qt.ForegroundRole, Qt.BackgroundRole, Qt.TextAlignmentRole])
 
     def set_zoom_factor(self, factor: float) -> None:
+        if abs(self.zoom_factor - factor) < 0.001:
+            return
         self.zoom_factor = factor
         if self.rowCount() and self.columnCount():
             self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1), [Qt.FontRole, Qt.DisplayRole])
