@@ -29,6 +29,38 @@ class StartupSettings:
         )
 
 
+def shared_client_startup(settings: StartupSettings, host: str, port: int) -> StartupSettings:
+    current = settings.normalized()
+    return StartupSettings(
+        startup_mode="shared_client",
+        shared_server_host=host,
+        shared_server_port=port,
+        local_server_port=current.local_server_port,
+    ).normalized()
+
+
+def local_server_startup(settings: StartupSettings, port: int) -> StartupSettings:
+    current = settings.normalized()
+    return StartupSettings(
+        startup_mode="local_server",
+        shared_server_host=current.shared_server_host,
+        shared_server_port=current.shared_server_port,
+        local_server_port=port,
+    ).normalized()
+
+
+def without_startup_mode(settings: StartupSettings, mode: str) -> StartupSettings:
+    current = settings.normalized()
+    if current.startup_mode != mode:
+        return current
+    return StartupSettings(
+        startup_mode="manual",
+        shared_server_host=current.shared_server_host,
+        shared_server_port=current.shared_server_port,
+        local_server_port=current.local_server_port,
+    ).normalized()
+
+
 def valid_port(value: int) -> int:
     try:
         port = int(value)

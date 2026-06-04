@@ -4,7 +4,14 @@ import unittest
 from pathlib import Path
 
 from pyexcel_lite.network import DEFAULT_PORT
-from pyexcel_lite.settings import StartupSettings, load_startup_settings, save_startup_settings
+from pyexcel_lite.settings import (
+    StartupSettings,
+    load_startup_settings,
+    local_server_startup,
+    save_startup_settings,
+    shared_client_startup,
+    without_startup_mode,
+)
 
 
 class StartupSettingsTest(unittest.TestCase):
@@ -49,6 +56,34 @@ class StartupSettingsTest(unittest.TestCase):
             self.assertEqual(settings.shared_server_host, "127.0.0.1")
             self.assertEqual(settings.shared_server_port, DEFAULT_PORT)
             self.assertEqual(settings.local_server_port, DEFAULT_PORT)
+
+    def test_shared_client_startup_preserves_local_server_port(self):
+        settings = shared_client_startup(
+            StartupSettings(local_server_port=9010),
+            "192.168.1.50",
+            9020,
+        )
+
+        self.assertEqual(settings.startup_mode, "shared_client")
+        self.assertEqual(settings.shared_server_host, "192.168.1.50")
+        self.assertEqual(settings.shared_server_port, 9020)
+        self.assertEqual(settings.local_server_port, 9010)
+
+    def test_local_server_startup_preserves_shared_server_target(self):
+        settings = local_server_startup(
+            StartupSettings(shared_server_host="192.168.1.60", shared_server_port=9021),
+            9030,
+        )
+
+        self.assertEqual(settings.startup_mode, "local_server")
+        self.assertEqual(settings.shared_server_host, "192.168.1.60")
+        self.assertEqual(settings.shared_server_port, 9021)
+        self.assertEqual(settings.local_server_port, 9030)
+
+    def test_without_startup_mode_only_disables_matching_mode(self):
+        shared = StartupSettings(startup_mode="shared_client", shared_server_host="192.168.1.70")
+        self.assertEqual(without_startup_mode(shared, "shared_client").startup_mode, "manual")
+        self.assertEqual(without_startup_mode(shared, "local_server").startup_mode, "shared_client")
 
 
 if __name__ == "__main__":

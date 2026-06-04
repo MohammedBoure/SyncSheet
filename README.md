@@ -15,6 +15,7 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 - Bar, line, and pie charts from the selected cells, with full-screen dialog viewing.
 - Realtime LAN collaboration with Host, Join, and Leave controls so multiple users can edit the same workbook together.
 - Network startup settings that can launch the app in manual mode, connect directly to a shared server, or make the current program host a server automatically.
+- Join and Host dialogs can save automatic network startup, so the next launch connects or hosts immediately.
 - Standalone shared-workbook and project server for LAN client/server use, with JSON state persistence.
 - TCP socket sync for workbook snapshots, cell edits, paste/clear batches, sheet add/rename/delete, and row/column insert/delete operations.
 - Formula bar with live display and raw formula editing.
@@ -64,6 +65,8 @@ Use `Network > Startup` to choose what happens when the program opens:
 - `Manual network controls`: start offline and use Host or Join manually.
 - `Connect to shared server`: connect to a fixed LAN IP and port immediately.
 - `Run this program as server`: start hosting immediately from this program.
+
+You can also enable automatic startup directly from `Network > Join` or `Network > Host` by checking the automatic option in that dialog. The program saves the selected IP and port, then uses them on the next launch without asking again.
 
 For a dedicated shared server on a LAN computer:
 

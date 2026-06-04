@@ -9,6 +9,7 @@ from PySide6.QtCore import QItemSelection, QItemSelectionModel, QModelIndex, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QColorDialog,
     QComboBox,
     QDialog,
@@ -64,7 +65,14 @@ from .project import (
     scan_project_folder,
 )
 from .qt_model import WorksheetTableModel
-from .settings import StartupSettings, load_startup_settings, save_startup_settings
+from .settings import (
+    StartupSettings,
+    load_startup_settings,
+    local_server_startup,
+    save_startup_settings,
+    shared_client_startup,
+    without_startup_mode,
+)
 from .theme import APP_STYLESHEET
 from .workbook import WorkbookData, WorksheetData
 
@@ -1221,8 +1229,12 @@ class SpreadsheetWindow(QMainWindow):
                 return
             self.leave_collaboration()
         if settings.startup_mode == "local_server":
+            self.statusBar().showMessage(f"Auto hosting on port {settings.local_server_port}")
             self.start_host_collaboration(settings.local_server_port, notify_user=False)
         elif settings.startup_mode == "shared_client":
+            self.statusBar().showMessage(
+                f"Auto connecting to {settings.shared_server_host}:{settings.shared_server_port}"
+            )
             self.start_client_collaboration(settings.shared_server_host, settings.shared_server_port)
 
     def open_startup_settings(self) -> None:
@@ -1284,10 +1296,37 @@ class SpreadsheetWindow(QMainWindow):
         self.apply_startup_settings(restart=True)
 
     def host_collaboration(self) -> None:
-        port, ok = QInputDialog.getInt(self, "Host collaboration", "Port", DEFAULT_PORT, 1, 65535)
-        if not ok:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Host collaboration")
+        layout = QFormLayout(dialog)
+
+        current = self.startup_settings.normalized()
+        port_box = QSpinBox()
+        port_box.setRange(1, 65535)
+        port_box.setValue(current.local_server_port or DEFAULT_PORT)
+        auto_start_box = QCheckBox("Start hosting automatically when the program opens")
+        auto_start_box.setChecked(current.startup_mode == "local_server")
+
+        layout.addRow("Port", port_box)
+        layout.addRow("", auto_start_box)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
             return
-        self.start_host_collaboration(port)
+        port = port_box.value()
+        started = self.start_host_collaboration(port)
+        if not started:
+            return
+        if auto_start_box.isChecked():
+            self.enable_local_server_startup(port)
+        else:
+            self.disable_startup_mode("local_server")
 
     def start_host_collaboration(self, port: int, *, notify_user: bool = True) -> bool:
         if self.collaboration is not None:
@@ -1310,8 +1349,33 @@ class SpreadsheetWindow(QMainWindow):
         return True
 
     def join_collaboration(self) -> None:
-        target, ok = QInputDialog.getText(self, "Join collaboration", "Server IP:port", text=f"127.0.0.1:{DEFAULT_PORT}")
-        if not ok or not target.strip():
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Join collaboration")
+        layout = QFormLayout(dialog)
+
+        current = self.startup_settings.normalized()
+        host_input = QLineEdit(current.shared_server_host)
+        port_box = QSpinBox()
+        port_box.setRange(1, 65535)
+        port_box.setValue(current.shared_server_port)
+        auto_connect_box = QCheckBox("Connect automatically when the program opens")
+        auto_connect_box.setChecked(current.startup_mode == "shared_client")
+
+        layout.addRow("Server IP", host_input)
+        layout.addRow("Port", port_box)
+        layout.addRow("", auto_connect_box)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+        target = f"{host_input.text().strip()}:{port_box.value()}"
+        if not host_input.text().strip():
             return
         try:
             host, port = self.parse_collaboration_target(target.strip())
@@ -1319,6 +1383,10 @@ class SpreadsheetWindow(QMainWindow):
             QMessageBox.warning(self, "Join collaboration", str(exc))
             return
         self.start_client_collaboration(host, port)
+        if auto_connect_box.isChecked():
+            self.enable_shared_client_startup(host, port)
+        else:
+            self.disable_startup_mode("shared_client")
 
     def start_client_collaboration(self, host: str, port: int) -> bool:
         if self.collaboration is not None:
@@ -1327,6 +1395,23 @@ class SpreadsheetWindow(QMainWindow):
         self.attach_collaboration(client, "Client")
         client.start()
         return True
+
+    def enable_shared_client_startup(self, host: str, port: int) -> None:
+        self.startup_settings = shared_client_startup(self.startup_settings, host, port)
+        save_startup_settings(self.startup_settings)
+        self.statusBar().showMessage(f"Auto connect saved: {host}:{port}")
+
+    def enable_local_server_startup(self, port: int) -> None:
+        self.startup_settings = local_server_startup(self.startup_settings, port)
+        save_startup_settings(self.startup_settings)
+        self.statusBar().showMessage(f"Auto host saved on port {port}")
+
+    def disable_startup_mode(self, mode: str) -> None:
+        previous = self.startup_settings.normalized()
+        self.startup_settings = without_startup_mode(previous, mode)
+        if self.startup_settings != previous:
+            save_startup_settings(self.startup_settings)
+            self.statusBar().showMessage("Automatic network startup disabled")
 
     def leave_collaboration(self) -> None:
         if self.collaboration is None:
