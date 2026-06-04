@@ -10,7 +10,7 @@ PyExcel Lite is a PySide6 desktop spreadsheet built as a practical test for the 
 - Undo and redo for cell edits, paste operations, clears, and generated formulas.
 - Bar, line, and pie charts from the selected cells.
 - Realtime LAN collaboration with Host, Join, and Leave controls so multiple users can edit the same workbook together.
-- Network sync for workbook snapshots, cell edits, paste/clear batches, sheet add/rename/delete, and row/column insert/delete operations.
+- TCP socket sync for workbook snapshots, cell edits, paste/clear batches, sheet add/rename/delete, and row/column insert/delete operations.
 - Formula bar with live display and raw formula editing.
 - Formula library for applying arithmetic, statistical, logical, lookup, and custom cell algorithms to the active cell or selected range.
 - Basic formulas: `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, `IF`, `ROUND`, `ABS`, `SQRT`, `POWER`, `CONCAT`, `LEN`, `LEFT`, `RIGHT`, `UPPER`, `LOWER`, `AND`, `OR`, `NOT`, `TODAY`, and `NOW`.
@@ -49,7 +49,7 @@ On the server computer, choose `Network > Host` and keep the selected port, usua
 The Network panel shows the local address clients should use, for example `192.168.1.20:8765`.
 On each client computer on the same LAN, choose `Network > Join` and enter that server address.
 
-The host sends the current workbook as a snapshot when a user joins, then all users receive live updates for cell edits, pasted ranges, sheet changes, and row or column structure changes.
+The host sends the current workbook as a snapshot when a user joins, then all users receive live TCP socket updates for cell edits, pasted ranges, sheet changes, and row or column structure changes.
 
 ## Test
 

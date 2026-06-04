@@ -1,4 +1,5 @@
 import os
+import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -8,7 +9,9 @@ from PySide6.QtWidgets import QApplication
 
 from pyexcel_lite.main import SpreadsheetWindow
 from pyexcel_lite.network import (
+    CollaborationClient,
     CollaborationEndpoint,
+    CollaborationServer,
     cell_update_message,
     local_join_addresses,
     workbook_from_payload,
@@ -31,6 +34,15 @@ class CollaborationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def wait_until(self, predicate, timeout: float = 4.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.app.processEvents()
+            if predicate():
+                return
+            time.sleep(0.01)
+        self.fail("Timed out waiting for socket synchronization")
 
     def test_workbook_payload_round_trips_cells_styles_and_sheets(self):
         workbook = WorkbookData()
@@ -99,6 +111,38 @@ class CollaborationTest(unittest.TestCase):
         self.assertTrue(addresses)
         self.assertTrue(all(address.endswith(":9012") for address in addresses))
         self.assertNotIn("0.0.0.0:9012", addresses)
+
+    def test_socket_server_client_windows_sync_cell_edits_both_ways(self):
+        server_window = SpreadsheetWindow()
+        client_window = SpreadsheetWindow()
+        server = CollaborationServer(
+            host="127.0.0.1",
+            port=0,
+            snapshot_provider=lambda: workbook_to_payload(server_window.workbook),
+        )
+        client = None
+        try:
+            server_window.current_model.setData(server_window.current_model.index(0, 0), "initial", Qt.EditRole)
+            server_window.attach_collaboration(server, "Host")
+            server.start()
+
+            client = CollaborationClient("127.0.0.1", server.port)
+            client_window.attach_collaboration(client, "Client")
+            client.start()
+
+            self.wait_until(lambda: client_window.current_sheet.raw_value(0, 0) == "initial")
+
+            server_window.current_model.setData(server_window.current_model.index(0, 0), "from-server", Qt.EditRole)
+            self.wait_until(lambda: client_window.current_sheet.raw_value(0, 0) == "from-server")
+
+            client_window.current_model.setData(client_window.current_model.index(0, 1), "from-client", Qt.EditRole)
+            self.wait_until(lambda: server_window.current_sheet.raw_value(0, 1) == "from-client")
+        finally:
+            if client is not None:
+                client.stop()
+            server.stop()
+            client_window.close()
+            server_window.close()
 
 
 if __name__ == "__main__":

@@ -690,6 +690,7 @@ class SpreadsheetWindow(QMainWindow):
         self.tabs.insertTab(index, view, sheet.name)
 
     def on_local_values_changed(self, sheet: WorksheetData, values: list[tuple[int, int, object]]) -> None:
+        self.refresh_workbook_formulas()
         if self.applying_remote_update or self.collaboration is None:
             return
         try:
@@ -697,6 +698,10 @@ class SpreadsheetWindow(QMainWindow):
         except ValueError:
             return
         self.send_collaboration_message(cell_update_message(sheet_index, sheet.name, values))
+
+    def refresh_workbook_formulas(self) -> None:
+        for model in self.models:
+            model.refresh_formulas()
 
     def send_collaboration_message(self, message: dict) -> None:
         if self.applying_remote_update or self.collaboration is None or not self.collaboration.running:
@@ -864,6 +869,7 @@ class SpreadsheetWindow(QMainWindow):
             model.set_values(values, refresh_dependents=True, record_undo=False, notify_change=False)
         finally:
             self.applying_remote_update = False
+        self.refresh_workbook_formulas()
         if model is self.current_model:
             self.update_formula_bar()
             self.update_selection_stats()
@@ -929,6 +935,7 @@ class SpreadsheetWindow(QMainWindow):
                 model.remove_columns(start, count)
         finally:
             self.applying_remote_update = False
+        self.refresh_workbook_formulas()
         self.statusBar().showMessage(f"Remote structure update: {model.sheet.name}")
 
     def remote_model(self, message: dict, create: bool = False) -> WorksheetTableModel | None:
@@ -1064,6 +1071,7 @@ class SpreadsheetWindow(QMainWindow):
         sheet_index = self.tabs.currentIndex()
         sheet_name = self.current_sheet.name
         self.current_model.insert_rows(start, 1)
+        self.refresh_workbook_formulas()
         self.send_collaboration_message(structure_message("insert_rows", sheet_index, sheet_name, start, 1))
 
     def delete_row(self) -> None:
@@ -1072,6 +1080,7 @@ class SpreadsheetWindow(QMainWindow):
             sheet_index = self.tabs.currentIndex()
             sheet_name = self.current_sheet.name
             self.current_model.remove_rows(row, 1)
+            self.refresh_workbook_formulas()
             self.send_collaboration_message(structure_message("remove_rows", sheet_index, sheet_name, row, 1))
 
     def insert_column(self) -> None:
@@ -1080,6 +1089,7 @@ class SpreadsheetWindow(QMainWindow):
         sheet_index = self.tabs.currentIndex()
         sheet_name = self.current_sheet.name
         self.current_model.insert_columns(start, 1)
+        self.refresh_workbook_formulas()
         self.send_collaboration_message(structure_message("insert_columns", sheet_index, sheet_name, start, 1))
 
     def delete_column(self) -> None:
@@ -1088,6 +1098,7 @@ class SpreadsheetWindow(QMainWindow):
             sheet_index = self.tabs.currentIndex()
             sheet_name = self.current_sheet.name
             self.current_model.remove_columns(column, 1)
+            self.refresh_workbook_formulas()
             self.send_collaboration_message(structure_message("remove_columns", sheet_index, sheet_name, column, 1))
 
     def clear_cells(self) -> None:
