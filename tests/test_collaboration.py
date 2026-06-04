@@ -115,18 +115,22 @@ class CollaborationTest(unittest.TestCase):
     def test_socket_server_client_windows_sync_cell_edits_both_ways(self):
         server_window = SpreadsheetWindow()
         client_window = SpreadsheetWindow()
+        observed_network_messages = []
         server = CollaborationServer(
             host="127.0.0.1",
             port=0,
             snapshot_provider=lambda: workbook_to_payload(server_window.workbook),
+            heartbeat_interval=0.1,
         )
+        server.message_received.connect(lambda message: observed_network_messages.append(message))
         client = None
         try:
             server_window.current_model.setData(server_window.current_model.index(0, 0), "initial", Qt.EditRole)
             server_window.attach_collaboration(server, "Host")
             server.start()
 
-            client = CollaborationClient("127.0.0.1", server.port)
+            client = CollaborationClient("127.0.0.1", server.port, heartbeat_interval=0.1)
+            client.message_received.connect(lambda message: observed_network_messages.append(message))
             client_window.attach_collaboration(client, "Client")
             client.start()
 
@@ -138,6 +142,14 @@ class CollaborationTest(unittest.TestCase):
             self.assertTrue(all(connection.sock.gettimeout() is None for connection in server_connections))
 
             self.wait_until(lambda: client_window.current_sheet.raw_value(0, 0) == "initial")
+            observed_network_messages.clear()
+
+            heartbeat_deadline = time.monotonic() + 0.35
+            while time.monotonic() < heartbeat_deadline:
+                self.app.processEvents()
+                time.sleep(0.01)
+            self.assertTrue(client._connection is not None and bool(server._clients))
+            self.assertFalse(any(message.get("type") in {"ping", "pong"} for message in observed_network_messages))
 
             server_window.current_model.setData(server_window.current_model.index(0, 0), "from-server", Qt.EditRole)
             self.wait_until(lambda: client_window.current_sheet.raw_value(0, 0) == "from-server")

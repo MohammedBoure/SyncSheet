@@ -16,7 +16,10 @@ from .workbook import CellData, CellStyle, WorkbookData, WorksheetData
 DEFAULT_PORT = 8765
 PROTOCOL_VERSION = 1
 RECONNECT_DELAY_SECONDS = 1.5
+HEARTBEAT_INTERVAL_SECONDS = 10.0
 STYLE_FIELDS = set(CellStyle.__dataclass_fields__)
+PING_MESSAGE = {"type": "ping"}
+PONG_MESSAGE = {"type": "pong"}
 
 
 def configure_collaboration_socket(sock: socket.socket) -> None:
@@ -200,15 +203,23 @@ class CollaborationEndpoint(QObject):
 
 
 class CollaborationServer(CollaborationEndpoint):
-    def __init__(self, host: str = "0.0.0.0", port: int = DEFAULT_PORT, snapshot_provider: Callable[[], dict] | None = None):
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = DEFAULT_PORT,
+        snapshot_provider: Callable[[], dict] | None = None,
+        heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
+    ):
         super().__init__()
         self.host = host
         self.port = port
         self.snapshot_provider = snapshot_provider
+        self.heartbeat_interval = heartbeat_interval
         self._server_socket: socket.socket | None = None
         self._clients: list[_JsonConnection] = []
         self._clients_lock = threading.Lock()
         self._accept_thread: threading.Thread | None = None
+        self._heartbeat_thread: threading.Thread | None = None
 
     def start(self) -> None:
         if self._running:
@@ -222,6 +233,8 @@ class CollaborationServer(CollaborationEndpoint):
         self._running = True
         self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
         self._accept_thread.start()
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
         self.status_changed.emit(f"Server ready. Clients join: {', '.join(local_join_addresses(self.port))}")
 
     def send(self, message: dict) -> None:
@@ -272,6 +285,8 @@ class CollaborationServer(CollaborationEndpoint):
     def _client_loop(self, client: _JsonConnection) -> None:
         try:
             for message in _iter_json_messages(client.sock):
+                if self._handle_heartbeat_message(client, message):
+                    continue
                 self.message_received.emit(message)
                 self._broadcast(message, exclude=client)
         except OSError as exc:
@@ -279,6 +294,26 @@ class CollaborationServer(CollaborationEndpoint):
                 self.error_occurred.emit(f"Client error: {exc}")
         finally:
             self._remove_client(client)
+
+    def _heartbeat_loop(self) -> None:
+        while self._running:
+            self._wait_for_heartbeat()
+            if self._running:
+                self._broadcast(PING_MESSAGE)
+
+    def _wait_for_heartbeat(self) -> None:
+        deadline = time.monotonic() + max(0.1, self.heartbeat_interval)
+        while self._running and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    def _handle_heartbeat_message(self, client: _JsonConnection, message: dict) -> bool:
+        message_type = message.get("type")
+        if message_type == "ping":
+            client.send(PONG_MESSAGE)
+            return True
+        if message_type == "pong":
+            return True
+        return False
 
     def _broadcast(self, message: dict, exclude: _JsonConnection | None = None) -> None:
         with self._clients_lock:
@@ -304,12 +339,14 @@ class CollaborationServer(CollaborationEndpoint):
 
 
 class CollaborationClient(CollaborationEndpoint):
-    def __init__(self, host: str, port: int = DEFAULT_PORT):
+    def __init__(self, host: str, port: int = DEFAULT_PORT, heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS):
         super().__init__()
         self.host = host
         self.port = port
+        self.heartbeat_interval = heartbeat_interval
         self._connection: _JsonConnection | None = None
         self._thread: threading.Thread | None = None
+        self._heartbeat_thread: threading.Thread | None = None
 
     def start(self) -> None:
         if self._running:
@@ -317,6 +354,8 @@ class CollaborationClient(CollaborationEndpoint):
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
 
     def send(self, message: dict) -> None:
         if self._connection is None:
@@ -339,6 +378,8 @@ class CollaborationClient(CollaborationEndpoint):
                 self._connection = connection
                 self.status_changed.emit(f"Connected to {self.host}:{self.port}")
                 for message in _iter_json_messages(sock):
+                    if self._handle_heartbeat_message(message):
+                        continue
                     self.message_received.emit(message)
                     if not self._running:
                         break
@@ -359,6 +400,33 @@ class CollaborationClient(CollaborationEndpoint):
         deadline = time.monotonic() + RECONNECT_DELAY_SECONDS
         while self._running and time.monotonic() < deadline:
             time.sleep(0.05)
+
+    def _heartbeat_loop(self) -> None:
+        while self._running:
+            self._wait_for_heartbeat()
+            connection = self._connection
+            if not self._running or connection is None:
+                continue
+            try:
+                connection.send(PING_MESSAGE)
+            except OSError:
+                connection.close()
+
+    def _wait_for_heartbeat(self) -> None:
+        deadline = time.monotonic() + max(0.1, self.heartbeat_interval)
+        while self._running and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    def _handle_heartbeat_message(self, message: dict) -> bool:
+        message_type = message.get("type")
+        if message_type == "ping":
+            connection = self._connection
+            if connection is not None:
+                connection.send(PONG_MESSAGE)
+            return True
+        if message_type == "pong":
+            return True
+        return False
 
 
 def _iter_json_messages(sock: socket.socket):
