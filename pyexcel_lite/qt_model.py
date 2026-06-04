@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QItemSelectionRange, Qt
 from PySide6.QtGui import QBrush, QColor, QFont
 
 from .cell_address import index_to_column_name
@@ -151,6 +151,17 @@ class WorksheetTableModel(QAbstractTableModel):
         values = [(index.row(), index.column(), "") for index in indexes if index.isValid()]
         self.set_values(values, refresh_dependents=refresh_dependents)
 
+    def clear_ranges(self, ranges: list[QItemSelectionRange], refresh_dependents: bool = True) -> None:
+        normalized = self._normalized_ranges(ranges)
+        if not normalized:
+            return
+        values = [
+            (row, column, "")
+            for row, column in self._used_positions_in_ranges(normalized)
+            if self.sheet.raw_value(row, column) not in ("", None)
+        ]
+        self.set_values(values, refresh_dependents=refresh_dependents)
+
     def can_undo(self) -> bool:
         return bool(self.undo_stack)
 
@@ -215,8 +226,6 @@ class WorksheetTableModel(QAbstractTableModel):
         if abs(self.zoom_factor - factor) < 0.001:
             return
         self.zoom_factor = factor
-        if self.rowCount() and self.columnCount():
-            self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1), [Qt.FontRole, Qt.DisplayRole])
 
     def insert_rows(self, start: int, count: int = 1) -> None:
         self.beginInsertRows(QModelIndex(), start, start + count - 1)
@@ -272,6 +281,21 @@ class WorksheetTableModel(QAbstractTableModel):
             self.beginInsertColumns(QModelIndex(), old_count, column)
             self.sheet.column_count = column + 1
             self.endInsertColumns()
+
+    def _normalized_ranges(self, ranges: list[QItemSelectionRange]) -> list[tuple[int, int, int, int]]:
+        normalized = []
+        for item in ranges:
+            top = max(0, item.top())
+            bottom = max(top, item.bottom())
+            left = max(0, item.left())
+            right = max(left, item.right())
+            normalized.append((top, left, bottom, right))
+        return normalized
+
+    def _used_positions_in_ranges(self, ranges: list[tuple[int, int, int, int]]):
+        for row, column in sorted(self.sheet.cells):
+            if any(top <= row <= bottom and left <= column <= right for top, left, bottom, right in ranges):
+                yield row, column
 
     def _font_from_style(self, style: CellStyle) -> QFont:
         font = QFont(style.font_family, max(1, round(style.font_size * self.zoom_factor)))

@@ -177,10 +177,10 @@ class SpreadsheetView(QTableView):
         model.set_values(values, refresh_dependents=True)
 
     def clear_selection(self) -> None:
-        indexes = self.selectedIndexes()
-        if not indexes:
+        selection = self.selectionModel().selection()
+        if selection.isEmpty():
             return
-        self.model().clear_indexes(indexes, refresh_dependents=True)
+        self.model().clear_ranges(list(selection), refresh_dependents=True)
 
     def contextMenuEvent(self, event) -> None:
         self.prepare_context_selection(self.indexAt(event.pos()))
@@ -248,7 +248,7 @@ class SpreadsheetWindow(QMainWindow):
         self.models: list[WorksheetTableModel] = []
         self.current_path: Path | None = None
         self.zoom_percent = 100
-        self.max_stats_cells = 5000
+        self.max_stats_cells = 1200
         self.collaboration: CollaborationEndpoint | None = None
         self.collaboration_role = ""
         self.collaboration_status = "Offline"
@@ -1225,6 +1225,8 @@ class SpreadsheetWindow(QMainWindow):
             except Exception:
                 continue
             points.append(ChartPoint(label, value))
+            if len(points) >= 200:
+                return points
         return points
 
     def _flat_numeric_chart_points(self, ranges: list[QItemSelection]) -> list[ChartPoint]:
@@ -1259,7 +1261,7 @@ class SpreadsheetWindow(QMainWindow):
         self.tabs.insertTab(index, view, sheet.name)
 
     def on_local_values_changed(self, sheet: WorksheetData, values: list[tuple[int, int, object]]) -> None:
-        self.refresh_workbook_formulas()
+        self.refresh_workbook_formulas(exclude_model=self.model_for_sheet(sheet))
         if self.applying_remote_update or self.collaboration is None:
             return
         try:
@@ -1268,8 +1270,16 @@ class SpreadsheetWindow(QMainWindow):
             return
         self.send_collaboration_message(cell_update_message(sheet_index, sheet.name, values, self.active_workbook_id))
 
-    def refresh_workbook_formulas(self) -> None:
+    def model_for_sheet(self, sheet: WorksheetData) -> WorksheetTableModel | None:
         for model in self.models:
+            if model.sheet is sheet:
+                return model
+        return None
+
+    def refresh_workbook_formulas(self, exclude_model: WorksheetTableModel | None = None) -> None:
+        for model in self.models:
+            if model is exclude_model:
+                continue
             model.refresh_formulas()
 
     def send_collaboration_message(self, message: dict) -> None:
@@ -1817,7 +1827,7 @@ class SpreadsheetWindow(QMainWindow):
             model.set_values(values, refresh_dependents=True, record_undo=False, notify_change=False)
         finally:
             self.applying_remote_update = False
-        self.refresh_workbook_formulas()
+        self.refresh_workbook_formulas(exclude_model=model)
         if model is self.current_model:
             self.update_formula_bar()
             self.update_selection_stats()
@@ -2159,6 +2169,9 @@ class SpreadsheetWindow(QMainWindow):
         view.horizontalHeader().setDefaultSectionSize(max(45, round(95 * factor)))
         view.verticalHeader().setDefaultSectionSize(max(18, round(26 * factor)))
         view.setStyleSheet(f"QTableView {{ font-size: {max(7, round(10 * factor))}pt; }}")
+        view.viewport().update()
+        view.horizontalHeader().viewport().update()
+        view.verticalHeader().viewport().update()
 
     def commit_formula_bar(self) -> None:
         index = self.current_view.currentIndex()
@@ -2227,6 +2240,8 @@ class SpreadsheetWindow(QMainWindow):
                     if scanned_count >= self.max_stats_cells:
                         break
                     scanned_count += 1
+                    if self.current_sheet.raw_value(row, column) in ("", None):
+                        continue
                     try:
                         value = self.evaluator.evaluate_cell(self.current_sheet, row, column)
                         numbers.append(to_number(value))
