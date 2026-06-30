@@ -90,8 +90,3 @@ Each openable project file is tracked by its relative path. If one user edits `r
 If a client opens a project spreadsheet that is not cached locally yet, it requests that workbook from the host or shared server and opens it when the snapshot arrives.
 The shared server stores the active workbook, synchronized project workbooks, and the latest project snapshot, so new clients receive the same workspace context when they join.
 
-## Test
-
-```powershell
-D:\git\GoldShop\venv\Scripts\python.exe -m unittest discover -s tests
-```
